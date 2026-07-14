@@ -1,0 +1,27 @@
+# === 核心依赖 ===
+pydantic>=2.5
+networkx>=3.2
+numpy>=1.25
+scipy>=1.11
+pyyaml>=6.0
+tqdm>=4.66
+matplotlib>=3.8
+typer>=0.9
+rich>=13.7
+
+# === Neo4j 存储 ===
+neo4j>=5.14
+
+# === 开发工具 ===
+pytest>=7.4
+pytest-cov>=4.1
+black>=23.12
+isort>=5.13
+flake8>=7.0
+mypy>=1.8
+pre-commit>=3.6
+
+# === CARLA 提取 ===
+# carla==0.9.16  # 通过 pip install path/to/carla.egg 安装
+pandas>=2.1
+pyarrow>=14.0

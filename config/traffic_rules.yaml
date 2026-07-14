@@ -1,0 +1,76 @@
+# 交通法规配置 (v3 §4.14-4.15)
+rules:
+  R1:
+    name: "YieldingToPedestrianViolation"
+    description: "行人优先（人行横道）"
+    legal_basis: "道交法第47条"
+  R2:
+    name: "RedLightViolation"
+    description: "闯红灯"
+    legal_basis: "道交法第38条"
+  R3:
+    name: "IllegalLaneCrossing"
+    description: "实线变道"
+    legal_basis: "道交法第44条"
+  R4:
+    name: "WrongSideMeetingViolation"
+    description: "对向会车违规"
+    legal_basis: "道交法第48条"
+  R5:
+    name: "IllegalReversing"
+    description: "逆行"
+    legal_basis: "道交法第35条"
+  R6:
+    name: "IllegalUturn"
+    description: "违规掉头"
+    legal_basis: "道交法第49条"
+  R7:
+    name: "JunctionNoYieldViolation"
+    description: "路口未让行"
+    legal_basis: "道交法第52条"
+  R8:
+    name: "VulnerableUserProtectionViolation"
+    description: "弱势参与者保护"
+    legal_basis: "道交法第42条"
+  R9:
+    name: "SchoolZoneSpeedViolation"
+    description: "学区限速"
+    legal_basis: "道交法实施条例第45条"
+  R10:
+    name: "HighwaySpeedViolation"
+    description: "高速公路限速"
+    legal_basis: "道交法实施条例第78条"
+  R11:
+    name: "WeatherSpeedViolation"
+    description: "恶劣天气限速"
+    legal_basis: "道交法实施条例第81条"
+  R13:
+    name: "IllegalStopViolation"
+    description: "禁停"
+    legal_basis: "道交法第63条"
+  R14:
+    name: "TrafficSignDisobeyViolation"
+    description: "违反交通标志"
+    legal_basis: "道交法第38条"
+  R15:
+    name: "MarkingDisobeyViolation"
+    description: "违反标线"
+    legal_basis: "道交法实施条例第53条"
+  R16:
+    name: "AmberLightJumpingViolation"
+    description: "黄灯抢行"
+    legal_basis: "道交法第26条"
+  R17:
+    name: "WrongLaneViolation"
+    description: "不按规定车道行驶"
+    legal_basis: "道交法实施条例第44条"
+  R18:
+    name: "WrongDirectionLaneViolation"
+    description: "不按导向车道行驶"
+    legal_basis: "道交法实施条例第51条"
+
+weather_speed_limits:
+  severely_reduced: 30
+  poor: 50
+  reduced: 70
+  clear: null

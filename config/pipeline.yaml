@@ -1,0 +1,19 @@
+# 主流水线配置
+pipeline:
+  extract: true
+  build_scene: true
+  build_behavior: true
+  run_rules: true
+  update_dynamic: true
+  write_neo4j: true
+
+carla:
+  host: "localhost"
+  port: 2000
+  timeout: 10.0
+  sync_mode: true
+
+recording:
+  enabled: false
+  filepath: null
+  max_frames: -1

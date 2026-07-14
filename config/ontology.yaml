@@ -1,0 +1,100 @@
+﻿# 本体配置 v1 — 对应《方案A定版_v3》§1
+# ======================================
+entity_types:
+  VEHICLE: "Vehicle"
+  PEDESTRIAN: "Pedestrian"
+  TRAFFIC_LIGHT: "TrafficLight"
+  LANE: "Lane"
+  ROAD: "Road"
+  JUNCTION: "Junction"
+  ENV_SNAPSHOT: "EnvSnapshot"
+  SCENE_SNAPSHOT: "SceneSnapshot"
+  MANEUVER: "Maneuver"
+  INTERACTION_EVENT: "Interaction"
+  RULE_DEFINITION: "Rule"
+  RULE_PARAMETER: "Param"
+  SAFETY_VIOLATION: "SafetyViolation"
+  RESPONSIBILITY_ASSIGNMENT: "Responsibility"
+
+# 场景层 (v3 §2.8)
+scene_relation_types:
+  in_lane: "实体在车道内"
+  on_road: "车辆在路段上"
+  in_junction: "车辆在路口内"
+  adjacent_lane: "相邻车道"
+  lane_connects: "道路连通"
+  ahead_of: "后车在前车前方"
+  beside: "并排"
+  nearby_pedestrian: "附近行人"
+  controlled_by: "信号灯控制车道"
+  containsVehicle: "帧包含车辆"
+  containsPedestrian: "帧包含行人"
+  containsTrafficLight: "帧包含信号灯"
+  containsRoad: "帧包含路段"
+  hasEnvironment: "帧环境"
+  weather_context: "全局语境"
+
+# 行为层 (v3 §3.3)
+behavior_relation_types:
+  standing_still: "静止"
+  changing_lane: "变道"
+  following: "跟驰"
+  approaching: "接近信号灯"
+  yielding_to: "让行"
+  overtaking: "超车"
+  wrong_side_meeting: "对向会车"
+  opposite_direction: "对向"
+  same_direction: "同向"
+  blocked_view: "视线遮挡"
+  approaching_pedestrian: "接近行人"
+  approaching_intersection: "接近路口"
+  crossing: "横穿"
+
+# 规则层 (v3 §4.5)
+rule_relation_types:
+  definedBy: "引用规则定义"
+  usesParam: "使用参数"
+  supportedByEvidence: "证据链追溯"
+  violates: "违规"
+  triggers: "触发事件"
+  responsibleFor: "责任归因"
+  causedBy: "因果链"
+
+# 跨层桥接 (v3 §3.5)
+cross_layer_relation_types:
+  manifestsAs: "节点+边双轨"
+  actor: "行为主体"
+  src: "交互主语"
+  dst: "交互宾语"
+  hasVersion: "版本链"
+  has_maneuver: "车辆关联行为节点"
+  has_interaction: "实体关联交互事件"
+
+# 命名空间 (v3 §1.9)
+namespace_prefixes:
+  veh_: "VehicleEntity"
+  ped_: "PedestrianEntity"
+  tl_: "TrafficLightEntity"
+  road_: "RoadElementEntity"
+  man_: "ManeuverNode"
+  sv_: "SafetyViolation"
+  resp_: "ResponsibilityAssignment"
+
+# ID 规范 (v3 §1.9.2)
+id_formats:
+  VehicleEntity: "veh_<actor_id>"
+  PedestrianEntity: "ped_<actor_id>"
+  TrafficLightEntity: "tl_<actor_id>"
+  RoadElementEntity: "road_<road_id>_lane_<lane_id>"
+  ManeuverNode: "man_<veh_id>_<frame_start>"
+  SafetyViolation: "sv_<rule_code>_<frame>"
+
+# 公理 (v3 §1.11)
+axioms:
+  A1: "唯一性"
+  A2: "类型固定"
+  A3: "属性版本化"
+  A4: "关系时态性"
+  A5: "三层递进"
+  A6: "事件可追溯"
+  A7: "增量一致"
