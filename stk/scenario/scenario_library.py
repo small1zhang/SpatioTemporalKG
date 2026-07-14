@@ -728,6 +728,13 @@ def make_S33_glare_multi_pedestrian() -> List[FrameData]:
 #   expected_rules: 预期规则层应命中的规则 ID 列表
 #   expected_sv: 预期 SafetyViolation ID（"-" 表示无）
 #   expected_behaviors: 预期行为层应识别出的 maneuver 标签集合
+# 14 个场景的工厂 + 元数据（已对齐 v3 §4.14 R1-R18 + §4.9 RSS 子类 R13a/R14a/R15a/b）：
+#   tier: A/B/C/D  基线/单点异常/多车冲突/跨层联动
+#   category: 短标签 - 用于自动验证
+#   expected_rules: 预期 v3 规则层应命中的规则 ID 列表
+#                   规则 ID 严格对齐 v3 §4.14.2 (R1-R18) 与 v3 §4.9.3 (RSS 子类)
+#   expected_sv: 预期 SafetyViolation ID（"-" 表示无）
+#   expected_behaviors: 预期行为层应识别出的 maneuver 标签集合
 SCENARIO_REGISTRY: Dict[str, Dict[str, Any]] = {
     "S00": {"tier": "A", "category": "baseline_following",
             "expected_rules": [], "expected_sv": "-",
@@ -738,42 +745,54 @@ SCENARIO_REGISTRY: Dict[str, Dict[str, Any]] = {
     "S02": {"tier": "A", "category": "baseline_pedestrian_far",
             "expected_rules": [], "expected_sv": "-",
             "expected_behaviors": ["approaching_pedestrian"]},
+    # B 单点异常 (v3 §4.14 + §4.9 对齐)
     "S10": {"tier": "B", "category": "anomaly_pedestrian_sudden",
-            "expected_rules": ["R4", "RSS_ped_proximity"], "expected_sv": "sv_001",
+            # v3 R1 = 行人优先（人行横道）；R13a = RSS SafeDistanceViolation
+            "expected_rules": ["R1", "RSS_R13a"], "expected_sv": "sv_001",
             "expected_behaviors": ["approaching_pedestrian", "blocked_view"]},
     "S11": {"tier": "B", "category": "anomaly_unprotected_left",
-            "expected_rules": ["R5", "RSS_junction_priority"], "expected_sv": "sv_002",
+            # v3 R4 = 对向会车违规；R7 = 路口未让行
+            "expected_rules": ["R4", "R7"], "expected_sv": "sv_002",
             "expected_behaviors": ["yielding_to", "wrong_side_meeting"]},
     "S12": {"tier": "B", "category": "anomaly_red_light_run",
-            "expected_rules": ["R1", "RSS_red_light"], "expected_sv": "sv_003",
+            # v3 R2 = 闯红灯
+            "expected_rules": ["R2"], "expected_sv": "sv_003",
             "expected_behaviors": ["approaching_intersection"]},
     "S13": {"tier": "B", "category": "anomaly_too_close",
-            "expected_rules": ["R7", "RSS_THW"], "expected_sv": "sv_004",
+            # v3 R13a = RSS SafeDistanceViolation (纵向); R15a = NoProperResponse
+            "expected_rules": ["RSS_R13a", "RSS_R15a"], "expected_sv": "sv_004",
             "expected_behaviors": ["following", "blocked_view"]},
+    # C 多车冲突
     "S20": {"tier": "C", "category": "complexity_merging",
-            "expected_rules": ["R5", "RSS_lane_change_safe"], "expected_sv": "sv_005",
+            # v3 R7 = 路口未让行（这里扩展包含汇入主路的让行场景）
+            "expected_rules": ["R7"], "expected_sv": "sv_005",
             "expected_behaviors": ["changing_lane", "yielding_to"]},
     "S21": {"tier": "C", "category": "complexity_three_way",
-            "expected_rules": ["R5", "RSS_first_come_first_serve"], "expected_sv": "sv_006",
+            "expected_rules": ["R7"], "expected_sv": "sv_006",
             "expected_behaviors": ["yielding_to", "approaching_intersection"]},
     "S22": {"tier": "C", "category": "complexity_emergency",
-            "expected_rules": ["R6", "RSS_emergency_priority"], "expected_sv": "sv_007",
+            # v3 R7=路口未让行；R8=弱势参与者保护（扩展到应急车辆优先权）
+            "expected_rules": ["R7", "R8"], "expected_sv": "sv_007",
             "expected_behaviors": ["yielding_to", "emergency"]},
+    # D 跨层联动 (环境耦合)
     "S30": {"tier": "D", "category": "coupling_night_ped",
-            "expected_rules": ["R4", "R9", "RSS_ped_proximity"], "expected_sv": "sv_008",
+            # v3 R1 = 行人优先；R8 = 弱势参与者保护；R13a = RSS 纵向距离
+            "expected_rules": ["R1", "R8", "RSS_R13a"], "expected_sv": "sv_008",
             "expected_behaviors": ["approaching_pedestrian", "blocked_view"]},
     "S31": {"tier": "D", "category": "coupling_rainy_lc",
-            "expected_rules": ["R5", "R10", "RSS_lane_change_safe"], "expected_sv": "sv_009",
+            # v3 R11 = 恶劣天气限速；R17 = 不按规定车道；R14a = LateralDangerousState
+            "expected_rules": ["R11", "R17", "RSS_R14a"], "expected_sv": "sv_009",
             "expected_behaviors": ["changing_lane", "wrong_side_meeting"]},
     "S32": {"tier": "D", "category": "coupling_construction",
-            "expected_rules": ["R11", "RSS_safe_coridor"], "expected_sv": "sv_010",
+            # v3 R14 = 违反交通标志；R17 = 不按规定车道
+            "expected_rules": ["R14", "R17"], "expected_sv": "sv_010",
             "expected_behaviors": ["changing_lane", "following"]},
     "S33": {"tier": "D", "category": "coupling_glare_multi_ped",
-            "expected_rules": ["R4", "R9", "RSS_ped_proximity"], "expected_sv": "sv_011",
+            # v3 R1 = 行人优先；R8 = 弱势参与者保护；R13a = RSS 纵向距离
+            "expected_rules": ["R1", "R8", "RSS_R13a"], "expected_sv": "sv_011",
             "expected_behaviors": ["approaching_pedestrian", "blocked_view"]},
 }
 
-# 工厂表 - 给定场景 ID 调用对应 make_Sxx 函数
 SCENARIO_FACTORIES = {
     "S00": make_S00_baseline_following,
     "S01": make_S01_normal_signalized_intersection,
