@@ -55,6 +55,11 @@ class NodeLifecycle:
     def version_chain(self) -> List[Dict[str, Any]]:
         return list(self._versions)
 
+    def update(self, frame_id: int):
+        """每帧更新，保持 ACTIVE 状态。"""
+        if self._status == NodeLifecycleStatus.CREATED:
+            self.activate(frame_id)
+
     def activate(self, frame_id: int, reason: str = ""):
         if self._status != NodeLifecycleStatus.CREATED:
             return
@@ -93,3 +98,4 @@ class NodeLifecycle:
         return {"entity_id": self.entity_id, "status": self._status.value,
                 "frame_start": self._frame_start, "frame_end": self._frame_end,
                 "n_transitions": len(self._transitions), "n_versions": len(self._versions)}
+
