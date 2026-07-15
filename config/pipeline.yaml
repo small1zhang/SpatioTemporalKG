@@ -1,19 +1,14 @@
-# 主流水线配置
-pipeline:
-  extract: true
-  build_scene: true
-  build_behavior: true
-  run_rules: true
-  update_dynamic: true
-  write_neo4j: true
+# Pipeline 配置 (v3 §8)
+stages:
+  extraction: true
+  scenario: true
+  behavior: true
+  rules: true
+  dynamic: true
+  storage: true
+  replay: true
 
-carla:
-  host: "localhost"
-  port: 2000
-  timeout: 10.0
-  sync_mode: true
-
-recording:
-  enabled: false
-  filepath: null
-  max_frames: -1
+max_frames: 100
+scenario_ids: ["S00","S01","S02","S10","S11","S12","S13","S20","S21","S22","S30","S31","S32","S33"]
+output_dir: "data/pipeline_results"
+checkpoint_dir: "data/checkpoints"

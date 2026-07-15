@@ -76,4 +76,4 @@ def test_load_pipeline_config():
     from pathlib import Path
     base = Path(__file__).resolve().parent.parent
     cfg = load_config("pipeline.yaml", base_dir=base)
-    assert cfg["pipeline"]["build_scene"] is True
+    assert cfg["stages"]["extraction"] is True

@@ -122,7 +122,7 @@ class TestWriter:
                          frame_id=1, valid_from=1)
         cyphers = write_relation_batch([r])
         assert len(cyphers) == 1
-        assert "MERGE" in cyphers[0]
+        assert "MERGE" in cyphers[0][0]
 
 
 # ——— T6.7 queries.py ———
