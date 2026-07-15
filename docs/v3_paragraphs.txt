@@ -1,0 +1,1383 @@
+   0 | 时空动态知识图谱实验方案
+   1 | 基于 CARLA 0.9.16 真值的
+节点+边双轨本体设计方案（方案A 定版 v3）
+   3 | 第1章 一、时空动态知识图谱本体设计
+   4 | 1.1 文档定位
+   5 | 本文档是时空动态知识图谱实验设计的本体层规范文件，与已有实体属性关系设计文档（实体属性关系设计_Draft0.1）构成完整设计体系：
+   6 | 本文档：定义领域范围、命名规范、三层语义结构的边界与连接规则、动态更新机制的形式化描述
+   7 | 实体属性关系设计文档：给出每种实体/属性/关系在 CARLA 0.9.16 中的具体字段映射与计算方法
+   8 | 两者互补：本文档回答"是什么——图谱的逻辑结构"，后者回答"怎么取——从 CARLA 如何提取"。
+   9 | 1.2 设计目标与定位
+  10 | 1.2.1 核心定位
+  11 | 本研究构建的时空动态知识图谱作为自动驾驶场景异常检测的知识底座，服务于以下目标：
+  12 | 1.2.2 与 v8.3 实验方案的关系
+  13 | 本文档作为 v8.3 方案中"知识图谱整体结构说明"的本体层实施细则，其概念映射：
+  14 | ---
+  15 | 1.3 基础表达单元：实体、属性、关系
+  16 | 1.3.1 核心原则
+  17 | 实体、属性、关系是贯穿全图谱的基础建模单元，本身不构成独立的一层，而是每一层内部数据的表达方式。
+  18 | 1.3.2 命名规范
+  19 | **实体节点 Label**：PascalCase，如 `VehicleEntity`、`SafetyViolation`
+  20 | **关系类型**：snake_case，如 `in_lane`、`following`、`supportedByEvidence`
+  21 | **属性字段**：snake_case，如 `location_x`、`speed_kmh`
+  22 | **谓词命名**：PascalCase，如 `DangerousState(A,B,t)`、`RedLightViolation(A,R,t)`
+  23 | 1.3.3 双表达对齐原则（节点+边双轨）
+  24 | **节点表达**：每个规则触发实例建模为 `SafetyViolation` 节点（或 `RuleInstance` 节点），携带时间戳、证据链等信息
+  25 | **关系表达**：同一事件同时以关系边形式连接涉及实体，如 `VehicleA -[violatesRedLight]-> RoadElementR`
+  26 | **对应关系**：每个 `SafetyViolation` 节点有唯一 ID，其 `reason` 字段值与对应关系边的 `type` 一致。形式化谓词（如 `DangerousState(A,B,t)`）作为元数据存储于节点属性中
+  27 | ---
+  28 | 1.4 语义抽象的三层内容
+  29 | 1.4.1 整体结构
+  30 | 三层按语义抽象程度递进：场景层 → 行为层 → 规则层，下层是上层的输入，上层是下层的语义升华。
+  31 | ┌─────────────────────────────────────────────┐
+│                规则层 (Rule Layer)           │
+│   RSS子层 + 交通法规/场景子层               │
+│   回答：这些行为合不合规、危不危险？         │
+│   输出：DangerousState, ViolatesTrafficRule  │
+├─────────────────────────────────────────────┤
+│                行为层 (Behavior Layer)       │
+│   回答：这些实体在做什么、怎么互动？         │
+│   输出：following, approaching, yielding_to  │
+├─────────────────────────────────────────────┤
+│                场景层 (Scene Layer)          │
+│   回答：此刻这个世界长什么样？               │
+│   输出：VehicleEntity, TrafficLightEntity,   │
+│         RoadElementEntity, 空间关系          │
+└─────────────────────────────────────────────┘
+         ↑ 横向机制：动态更新（增量演化）
+  32 | 1.4.2 场景层
+  33 | 1.4.3 行为层
+  34 | 1.4.4 规则层
+  35 | 规则层内部子层划分
+  36 | 规则层
+├── RSS 子层 (底层物理安全校验)
+│   ├── 职责：车辆间纵横向安全距离的实时校验
+│   ├── 输入：场景层实体属性（位置、速度、朝向、加速度）
+│   ├── 核心公式：RSS 安全距离模型
+│   ├── 输出：DangerousState(A, B, t), SafeDistanceViolation, NoProperResponse, ResponsibleAgent
+│   └── 理论基础：Shalev-Shwartz et al. "On a Formal Model of Safe and Scalable Self-driving Cars"
+│
+└── 交通法规/场景子层（行为合规校验）
+    ├── 职责：闯红灯、实线变道、逆行、超速等行为规则判定
+    ├── 输入：场景层+行为层实体/关系数据
+    ├── 触发条件：形式化判别式（R1-R18 等）
+    ├── 输出：RedLightViolation, IllegalLaneCrossing, SpeedViolation 等
+    └── 理论基础：CoSI 本体、各国道路交通法规
+  37 | 双层设计的意义
+  38 | 两者互补：RSS 提供可证明安全的物理约束作为"强先验"，交规子层覆盖 RSS 未涉及的规则维度，共同构成完整的规则推理系统。
+  39 | 规则层节点与关系
+  40 | ---
+  41 | 1.5 横向机制：动态更新
+  42 | 1.5.1 定位
+  43 | 动态更新机制不是场景-行为-规则中的某一层内容，而是让这三层都能随时间增量演化的一套横向机制。 本身不产生新的语义内容，只负责"图谱如何被更新"。
+  44 | 1.5.2 四类更新动作
+  45 | 1.5.3 机制流程
+  46 | 每一帧
+  │
+  ▼
+CARLA 真值提取 → 原始数据
+  │
+  ▼
+构建帧快照 G_t → 实体集合 + 空间关系
+  │
+  ▼
+计算差分 Δg_t → 相对 G_{t-1} 的变化
+  │
+  ▼
+增量更新图谱 → 节点增删 / 属性更新 / 边增删
+  │
+  ▼
+规则推理 (RSS+交规) → 产出规则事件
+  │
+  ▼
+事件反向插入图谱 → SafetyViolation 节点
+  47 | 1.5.4 事件驱动反向插入机制
+  48 | 规则层判定出的 SafetyViolation（如 `DangerousState(A,B,t)`）作为事件节点动态插入图谱，触发新一轮图谱更新：
+  49 | SafetyViolation 节点携带 `frame_id`, `timestamp`, `severity`, `evidence_path` 属性
+  50 | 通过 `supportedByEvidence` 边连回场景层/行为层相关实体/关系
+  51 | 该事件被 GNN 下游模块消费，作为异常检测的先验特征
+  52 | 事件节点在 Neo4j 中可追溯查询，支持异常回放与因果分析
+  53 | 这一机制构成了规则驱动（RSS/交规推理）与数据驱动（图谱更新）的实际耦合点，而不只是两者并列存在。
+  54 | ---
+  55 | 1.6 完整结构概括
+  56 | ┌─────────────────────────────────────────────────────────────┐
+│                   时空动态知识图谱                         │
+│                                                             │
+│  基础表达单元：实体 ─（携带）─ 属性 ─（连接）─ 关系        │
+│              ↑              ↑              ↑               │
+│  层内容：  场景层实体     属性版本    场景/行为关系         │
+│           行为层实体     派生属性    规则推理关系           │
+│           规则层节点     动态计算                          │
+│                                                             │
+│  三层语义：场景层 → 行为层 → 规则层（递进抽象）            │
+│                                                             │
+│  横 向 机 制：动态更新（实体级/属性级/关系级/规则事件）    │
+└─────────────────────────────────────────────────────────────┘
+  57 | 1.7 本体形式化定义与公理体系
+  58 | 1.8 形式化符号体系
+  59 | 1.8.1 基础定义
+  60 | 定义本时空动态知识图谱为本体 O := (E, A, R, T, P)：
+  61 | 1.8.2 实体的形式化
+  62 | 实体 e ∈ E 由以下五元组描述：
+  63 | e := (id, type, attrs, lifetime, layer)
+  64 | 1.8.3 关系的形式化
+  65 | 关系 r ∈ R 由以下六元组描述：
+  66 | r := (src, dst, type, attrs, time_window, confidence)
+  67 | 谓词式表达：每条关系 r 同时具有等价的谓词式 P(src, dst, t)：
+  68 | 关系 `VehicleA -[following]-> VehicleB @ t`
+  69 | 谓词 `Following(A, B, t)`
+  70 | 1.8.4 时态三元组
+  71 | 引入时态三元组概念：
+  72 | τ := (s, p, o, t)
+  73 | 其中 s 为主语（源实体），p 为谓词（关系类型），o 为宾语（目标实体），t 为时间戳（帧号 + 仿真时间）。
+  74 | 完整图谱 G 通过时态三元组集合 T 描述：
+  75 | G = (E, T, A, R)
+  76 | 其中：
+  77 | E 为实体集合
+  78 | T 为时态三元组集合
+  79 | A 为属性赋值集合 {(entity_id, attr_key, attr_value, valid_time)}
+  80 | R 为规则定义集合（规则层）
+  81 | ---
+  82 | 1.9 命名空间与命名约定
+  83 | 1.9.1 全局命名空间
+  84 | 1.9.2 实体 ID 规范
+  85 | 1.9.3 关系类型命名
+  86 | **空间关系**：动词/介词的 snake_case（in_lane, on_road, adjacent_lane）
+  87 | **行为关系**：动词现在分词的 snake_case（following, approaching, yielding_to）
+  88 | **规则关系**：违规类型 PascalCase 谓词（DangerousState, RedLightViolation）
+  89 | 1.9.4 属性命名
+  90 | 直接来自 CARLA 的属性保持原名（location_x, velocity_x）
+  91 | 派生属性加计算后缀（_rad, _kmh, _level）
+  92 | 布尔属性以 is_/has_ 前缀（is_on_crosswalk, has_traffic_light）
+  93 | ---
+  94 | 1.10 节点生命周期模型
+  95 | 1.10.1 生命周期模型选型
+  96 | 采用「帧级属性版本化 + 显式生命周期标记」混合模型：
+  97 | 节点本身长期存在，跨越多帧
+  98 | 属性按时间版本化，每条属性记录 `(value, valid_from_frame, valid_to_frame)`
+  99 | 实体进入/离开场景时记录 lifetime 边界
+ 100 | 长期不变的实体（道路、信号灯）保持单版本属性
+ 101 | 1.10.2 选型理由
+ 102 | 属性版本化方案的查询模式：给定 `(entity_id, attr, t)`，返回 `value` 满足 `valid_from_frame <= t <= valid_to_frame`。
+ 103 | ---
+ 104 | 1.11 核心公理
+ 105 | 1.11.1 基础公理集合
+ 106 | 1.11.2 推理规则示例
+ 107 | 安全距离公理（RSS 子层）
+ 108 | SafeDistanceViolation(A, B, t) ←
+    VehicleEntity(A) ∧ VehicleEntity(B) ∧
+    is_in_same_lane(A, B, t) ∧
+    longitudinal_distance(A, B, t) < d_min(A, B, t)
+ 109 | 其中：
+ 110 | d_min(A, B, t) = v_A(t)·ρ + 0.5·a_max,accel·ρ²
+               + (v_A(t)+a_max,accel·ρ)² / (2·a_min,brake)
+               - v_B(t)² / (2·a_brake)
+ 111 | 参数集：
+ 112 | ρ = 反应时间（默认 0.1 秒，可调）
+ 113 | a_max,accel = 舒适加速度上限
+ 114 | a_min,brake = 最小合理刹车减速度
+ 115 | a_brake = 最大刹车减速度
+ 116 | 横向危险公理（RSS 子层）
+ 117 | LateralDangerousState(A, B, t) ←
+    VehicleEntity(A) ∧ VehicleEntity(B) ∧
+    bbox_lateral_distance(A, B, t) < d_lat_min(t)
+ 118 | 行人让行公理（交规子层）
+ 119 | YieldingToPedestrianViolation(A, P, t) ←
+    VehicleEntity(A) ∧ PedestrianEntity(P) ∧
+    is_on_crosswalk(P, t) ∧
+    relative_distance(A, P, t) < 15m ∧
+    speed(A, t) > 0.5 m/s
+ 120 | 闯红灯公理（交规子层）
+ 121 | RedLightViolation(A, R, t) ←
+    VehicleEntity(A) ∧ RoadElementEntity(R) ∧
+    in_junction(A, R, t) ∧
+    signal_color_at(A, t-Δ) = Red ∧
+    speed(A, t) > 0.3 m/s
+ 122 | ---
+ 123 | 1.12 与现有本体的对比
+ 124 | 1.12.1 借鉴与改进
+ 125 | 1.12.2 与现有 KG 的核心差异
+ 126 | ---
+ 127 | 1.13 本体文档与下游实现的对应关系
+ 128 | 第2章 二、场景层节点与关系设计
+ 129 | 2.1 设计原则
+ 130 | 场景层是图谱的最底层建模单元，回答"此刻这个世界长什么样"。每个节点在 CARLA 0.9.16 真值流中都有明确的数据源。设计原则：
+ 131 | **可提取性**：每个字段必须能在 CARLA 中找到对应数据源（直接可用 或 可计算）
+ 132 | **语义独立**：每个节点类型对应一类不可进一步细分的现实对象
+ 133 | **属性完备**：节点属性覆盖该类实体的完整状态描述
+ 134 | **生命周期可追踪**：每个节点有明确的创建/销毁时机
+ 135 | ---
+ 136 | 2.2 节点类型总览
+ 137 | ---
+ 138 | 2.3 物理实体节点设计
+ 139 | 2.3.1 VehicleEntity
+ 140 | Label: `Vehicle`（Neo4j 节点标签）
+ 141 | Description: 描述场景中所有四轮及以上的机动车辆（含 ego 车辆）。
+ 142 | 完整属性表
+ 143 | 时态属性版本化
+ 144 | 属性按"持续变化阈值"判定是否生成新版本：
+ 145 | 每个连续版本存储为 `(value, valid_from_frame, valid_to_frame)`。
+ 146 | 与 CARLA 的对接
+ 147 | veh = carla.Vehicle  # from world.get_actors().filter('vehicle.*')
+attrs = {
+    'vehicle_id': veh.id,
+    'vehicle_type': veh.type_id,
+    'location_x': veh.get_location().x,
+    'location_y': veh.get_location().y,
+    'location_z': veh.get_location().z,
+    'velocity_x': veh.get_velocity().x,
+    'velocity_y': veh.get_velocity().y,
+    'velocity_z': veh.get_velocity().z,
+    'speed': veh.get_velocity().magnitude(),
+    'heading_rad': math.radians(veh.get_transform().rotation.yaw),
+    'bbox_extent_x': veh.get_bounding_box().extent.x,
+    'throttle': veh.get_control().throttle,
+    'brake': veh.get_control().brake,
+    'steer': veh.get_control().steer,
+}
+ 148 | 2.3.2 PedestrianEntity
+ 149 | Label: `Pedestrian`
+ 150 | 属性表
+ 151 | 派生属性计算
+ 152 | # is_on_crosswalk
+def check_on_crosswalk(ped_location, crosswalk_polygons):
+    for poly in crosswalk_polygons:
+        if poly.contains(ped_location):
+            return True
+    return False
+
+# is_on_sidewalk
+waypoint = carla_map.get_waypoint(ped_location)
+is_on_sidewalk = (waypoint.lane_type == carla.LaneType.Sidewalk)
+ 153 | 2.3.3 TrafficLightEntity
+ 154 | Label: `TrafficLight`
+ 155 | 属性表
+ 156 | affected_lane_ids 预处理
+ 157 | CARLA 不直接给出"哪盏灯控制哪条车道"，需在地图加载时预构建映射：
+ 158 | def build_traffic_light_lane_map(carla_map):
+    tl_map = {}  # tl_id -> list[lane_id]
+    for waypoint in carla_map.generate_waypoints(2.0):
+        if waypoint.lane_type == carla.LaneType.Driving:
+            tl = getattr(waypoint, 'traffic_light', None)
+            if tl is not None:
+                tl_map.setdefault(tl.id, []).append(waypoint.lane_id)
+    return tl_map
+ 159 | ---
+ 160 | 2.4 静态设施节点设计
+ 161 | 2.4.1 RoadElementEntity
+ 162 | Label: `Road`, `Lane`, `Junction`（多标签）
+ 163 | 属性表（以 Lane 为主，Road/Junction 为聚合）
+ 164 | 关键说明
+ 165 | **lane_id 符号约定**：正数表示与道路默认方向一致，负数表示对向车道（用于逆行检测）
+ 166 | **junction_id**：-1 表示非路口，正数表示进入路口区域
+ 167 | **junction 内部 waypoint 不连续**：CARLA 在 junction 内部不提供连续 path，需用 `get_junction().get_waypoints()` 离散采样
+ 168 | 2.4.2 EnvironmentSnapshot
+ 169 | Label: `EnvSnapshot`
+ 170 | Description: 每帧的环境上下文，作为场景层的全局属性节点。
+ 171 | 属性表
+ 172 | 派生属性规则
+ 173 | # time_of_day
+def time_of_day(sun_altitude_angle):
+    if sun_altitude_angle > 6:    return 'day'
+    elif -6 <= sun_altitude_angle <= 6:  return 'dusk_or_dawn'
+    else:  return 'night'
+
+# visibility_level
+def visibility_level(fog_density, precipitation):
+    score = fog_density + 0.5*precipitation
+    if score < 10: return 'clear'
+    elif score < 30: return 'reduced'
+    elif score < 60: return 'poor'
+    else: return 'severely_reduced'
+
+# road_friction
+def road_friction(wetness):
+    if wetness > 80:  return 0.3
+    elif wetness > 50:  return 0.5
+    else:  return 0.7
+ 174 | 2.4.3 ScenarioSnapshot
+ 175 | Label: `SceneSnapshot`
+ 176 | Description: 帧根节点，作为图谱中所有同帧实体的聚合根。
+ 177 | 属性表
+ 178 | 帧根节点的连接模式
+ 179 | ScenarioSnapshot -[containsVehicle]-> VehicleEntity
+ScenarioSnapshot -[containsPedestrian]-> PedestrianEntity
+ScenarioSnapshot -[containsTrafficLight]-> TrafficLightEntity
+ScenarioSnapshot -[containsRoad]-> RoadElementEntity
+ScenarioSnapshot -[hasEnvironment]-> EnvironmentSnapshot
+ 180 | ---
+ 181 | 2.5 节点生命周期管理
+ 182 | 2.5.1 动态实体（Vehicle/Pedestrian）
+ 183 | 2.5.2 静态实体（TrafficLight/Road）
+ 184 | 2.5.3 帧根与环境快照（每帧重建）
+ 185 | ---
+ 186 | 2.6 节点设计小结
+ 187 | **6 类节点**：4 类动态/静态实体 + 1 类环境快照 + 1 类帧根节点
+ 188 | **30+ 直接可用字段**：来自 CARLA 原生 API
+ 189 | **10+ 可计算字段**：均为 O(1) 或 O(n) 复杂度
+ 190 | **属性版本化**：保证时态可追溯性
+ 191 | **多标签 NEO4J 节点**：Road/Lane/Junction 通过多标签 Neo4j 节点表达
+ 192 | 2.7 设计原则
+ 193 | 场景层关系描述"实体之间在同一帧内的空间、拓扑、包含关系"，是行为层与规则层的语义基石。
+ 194 | **同帧性**：所有场景层关系成立的时态戳为某一特定帧 t
+ 195 | **几何确定性**：每条关系可由 CARLA 真值直接计算
+ 196 | **零防抖**：场景层空间关系不等抖（区别于行为关系需防抖）
+ 197 | **唯一性**：每对 (src, dst, type, t) 唯一
+ 198 | ---
+ 199 | 2.8 关系类型总览
+ 200 | ---
+ 201 | 2.9 详细关系定义
+ 202 | 2.9.1 拓扑关系
+ 203 | in_lane
+ 204 | VehicleEntity -[in_lane]-> RoadElementEntity
+ 205 | on_road
+ 206 | 条件：vehicle 中心在 road 多边形内（不区分车道）
+ 207 | 复杂度：O(k)，k=路段数
+ 208 | 用途：辅助异常检测（如车辆离开道路）
+ 209 | in_junction
+ 210 | 条件：waypoint(v).junction_id == road.junction_id 且 junction_id != -1
+ 211 | 复杂度：O(1)
+ 212 | 用途：路口场景识别，配合交通灯状态判断违规
+ 213 | adjacent_lane
+ 214 | 条件：lane_a.get_left_lane() == lane_b 或 get_right_lane() == lane_b
+ 215 | 复杂度：O(1)
+ 216 | 用途：变道行为识别基础
+ 217 | lane_connects
+ 218 | 条件：lane_a.next(distance) 包含 lane_b
+ 219 | 复杂度：O(n)
+ 220 | 用途：道路网络拓扑建立
+ 221 | ---
+ 222 | 2.9.2 空间关系
+ 223 | ahead_of
+ 224 | VehicleEntity(v) -[ahead_of]-> VehicleEntity(w)
+ 225 | beside
+ 226 | 条件：|lateral_distance(v,w)| < 3m 且 |longitudinal_distance(v,w)| < 5m
+ 227 | 复杂度：O(1)
+ 228 | 关系属性：{lateral_distance, longitudinal_distance}
+ 229 | 用途：超车/并道识别前驱
+ 230 | nearby_pedestrian
+ 231 | 条件：relative_distance(v, ped) < 20m
+ 232 | 复杂度：O(p)，p=行人数（一般 <50）
+ 233 | 优化：用 bbox 距离预过滤，再做精确判断
+ 234 | 用途：行人危险识别
+ 235 | ---
+ 236 | 2.9.3 控制关系
+ 237 | controlled_by
+ 238 | RoadElementEntity -[controlled_by]-> TrafficLightEntity
+ 239 | ---
+ 240 | 2.9.4 帧聚合关系
+ 241 | 每帧 ScenarioSnapshot 节点与同帧所有实体/快照的包含关系。
+ 242 | containsVehicle / containsPedestrian / containsTrafficLight / containsRoad
+ 243 | ScenarioSnapshot -[containsVehicle]-> VehicleEntity
+ 244 | hasEnvironment
+ 245 | ScenarioSnapshot -[hasEnvironment]-> EnvironmentSnapshot
+ 246 | 每帧唯一对应一个环境快照节点。
+ 247 | ---
+ 248 | 2.9.5 全局语境关系
+ 249 | weather_context
+ 250 | EnvironmentSnapshot -[weather_context]-> ScenarioSnapshot
+ 251 | 每帧自动建立，将天气/能见度等环境属性作为全局语境附在帧上。
+ 252 | ---
+ 253 | 2.10 关系属性通用字段
+ 254 | 每条场景层关系边携带以下属性（Neo4j 边属性）：
+ 255 | ---
+ 256 | 2.11 示例三元组
+ 257 | 2.11.1 车辆在车道内
+ 258 | (Vehicle {vehicle_id: 123})
+-[in_lane {frame_id: 2048, distance_to_lane_center: 0.3}]->
+(RoadElementEntity {road_id: 5, lane_id: 2})
+ 259 | 谓词式：`InLane(Veh_123, Road_5_Lane_2, Frame_2048)`
+ 260 | 2.11.2 信号灯控制路段
+ 261 | (RoadElementEntity {road_id: 5, lane_id: 2})
+-[controlled_by {valid_from_frame: 0}]->
+(TrafficLightEntity {traffic_light_id: 7})
+ 262 | 谓词式：`ControlledBy(Road_5_Lane_2, TL_7, *)`
+ 263 | 2.11.3 帧聚合
+ 264 | (SceneSnapshot {frame_id: 2048})
+-[containsVehicle {frame_id: 2048}]->
+(Vehicle {vehicle_id: 123, is_ego: true})
+ 265 | 谓词式：`ContainsVehicle(Frame_2048, Veh_123, Frame_2048)`
+ 266 | ---
+ 267 | 2.12 关系设计验证清单
+ 268 | ---
+ 269 | 2.13 与 v8.3 方案的章节映射
+ 270 | 2.14 场景库样本（预置复杂场景集合）
+ 271 | 为统一阶段 3/4/6/9 的验证输入，本节新增一个预置场景库（配套代码 stk/scenario/scenario_library.py），由 14 个工厂函数 make_Sxx_*() 生成。每个场景固定 6 帧（400 ms/帧，与 §7 CARLA 提取节奏对齐），可直接喂入 build_snapshot() 得到完整的实体+关系图。按图谱价值来源分四档：A 基线(3) + B 单点异常(4) + C 多车冲突(3) + D 跨层联动(4)。
+ 272 | 2.14.1 场景分类总表
+ 273 | 第3章 三、行为层节点与关系设计
+ 274 | 3.1 设计原则
+ 275 | 行为层是场景层在时间维度上的语义提炼，回答"这些实体在做什么、怎么互动"。
+ 276 | 3.1.1 核心设计决策：节点 + 边双轨
+ 277 | 经过权衡，本研究采用节点 + 边双轨表达方案：
+ 278 | 两者通过 `manifestsAs` 边关联：
+ 279 | ManeuverNode -[manifestsAs]-> {following_edge | approaching_edge | ...}
+ 280 | 节点的核心价值：
+ 281 | 行为有明确的起止时间（`frame_start`, `frame_end`），节点可携带完整生命周期
+ 282 | 行为可挂载派生属性（持续帧数、强度、速度变化等），节点表现力更强
+ 283 | 复杂行为（如超车）由多个原子行为组合而成，节点可链接子行为形成行为序列
+ 284 | 边的核心价值：
+ 285 | 直接表达实体间关系，图查询自然
+ 286 | GNN 模型消费边表更直接
+ 287 | 关系是行为的"瞬时语义快照"，节点是行为的"持续语义实例"
+ 288 | 3.1.2 行为分类
+ 289 | ---
+ 290 | 3.2 行为层节点设计
+ 291 | 3.2.1 ManeuverNode（独立行为节点）
+ 292 | Label: `Maneuver`
+ 293 | Description: 描述单个实体的持续行为状态。
+ 294 | 属性表
+ 295 | maneuver_type 子类型
+ 296 | 3.2.2 InteractionEvent（交互事件节点）
+ 297 | Label: `Interaction`
+ 298 | Description: 描述两个或多个实体间的交互事件，是行为层最核心的事件单元。
+ 299 | 属性表
+ 300 | interaction_type 子类型
+ 301 | ---
+ 302 | 3.3 行为层关系设计
+ 303 | 3.3.1 个体行为关系
+ 304 | standing_still
+ 305 | VehicleEntity -[standing_still]-> VehicleEntity (self-loop)
+ 306 | 注：`standing_still` 是个体行为，建模为 ManeuverNode 节点 + 自环边表达"该实体处于静止状态"。
+ 307 | changing_lane
+ 308 | VehicleEntity -[changing_lane]-> RoadElementEntity (target lane)
+ 309 | 3.3.2 交互行为关系
+ 310 | following
+ 311 | VehicleEntity(v) -[following]-> VehicleEntity(w)
+ 312 | approaching（车辆 → 信号灯）
+ 313 | VehicleEntity(v) -[approaching]-> TrafficLightEntity(tl)
+ 314 | yielding_to
+ 315 | VehicleEntity(v) -[yielding_to]-> PedestrianEntity(p)
+ 316 | overtaking
+ 317 | VehicleEntity(v) -[overtaking]-> VehicleEntity(w)
+ 318 | wrong_side_meeting / opposite_direction / same_direction
+ 319 | VehicleEntity -[opposite_direction]-> VehicleEntity
+ 320 | blocked_view
+ 321 | VehicleEntity(observer) -[blocked_view]-> VehicleEntity(target)
+ 322 | approaching_pedestrian
+ 323 | VehicleEntity(v) -[approaching_pedestrian]-> PedestrianEntity(p)
+ 324 | 3.3.3 演化行为关系
+ 325 | approaching_intersection
+ 326 | VehicleEntity(v) -[approaching_intersection]-> RoadElementEntity(junction)
+ 327 | crossing（行人）
+ 328 | PedestrianEntity(p) -[crossing]-> RoadElementEntity(crosswalk)
+ 329 | ---
+ 330 | 3.4 行为关系防抖设计
+ 331 | 3.4.1 防抖机制
+ 332 | 行为关系（特别是 following、approaching、yielding_to）在帧间可能因浮点精度、CARLA 物理引擎抖动而产生闪烁，引入「持续帧数阈值」机制：
+ 333 | 3.4.2 阈值表
+ 334 | 3.4.3 防抖实现伪代码
+ 335 | class RelationDebouncer:
+    def __init__(self, threshold):
+        self.counter = {}
+        self.active = {}
+        self.threshold = threshold
+    
+    def update(self, key, condition_met, frame_id):
+        if condition_met:
+            self.counter[key] = self.counter.get(key, 0) + 1
+            if self.counter[key] >= self.threshold:
+                if key not in self.active:
+                    self._create_edge(key, frame_id)
+                    self.active[key] = frame_id
+        else:
+            if key in self.active:
+                self.counter[key] = 0
+                if frame_id - self.active[key] >= self.threshold:
+                    self._delete_edge(key, frame_id)
+                    del self.active[key]
+            else:
+                self.counter[key] = 0
+ 336 | ---
+ 337 | 3.5 节点+边的关联机制
+ 338 | 3.5.1 关联边
+ 339 | 每条行为关系边通过 `manifestsAs` 边与对应的 Maneuver/Interaction 节点关联：
+ 340 | ManeuverNode(man_veh123_2048)
+-[manifestsAs {relation_type: "standing_still"}]->
+  (VehicleEntity veh_123)-[standing_still]->(VehicleEntity veh_123)
+ 341 | InteractionEvent(int_veh123_veh124_following_2048)
+-[manifestsAs {relation_type: "following"}]->
+  (VehicleEntity veh_123)-[following]->(VehicleEntity veh_124)
+ 342 | 3.5.2 关联查询示例
+ 343 | 查询某车辆在某帧所有持续 ≥ 5 帧的交互行为：
+ 344 | MATCH (v:Vehicle {vehicle_id: 123})-[r]->(w)
+WHERE r.frame_start <= 2048 <= r.frame_end
+  AND r.duration_frames >= 5
+WITH r, v, w
+MATCH (ie:Interaction)-[m:manifestsAs]->()
+WHERE m.relation_type = type(r)
+RETURN ie, r, v, w
+ 345 | ---
+ 346 | 3.6 行为层与场景层的连接
+ 347 | 3.6.1 行为节点引用场景层实体
+ 348 | 每个 ManeuverNode 节点通过 `actor` 边关联到场景层 VehicleEntity：
+ 349 | ManeuverNode -[actor]-> VehicleEntity
+ 350 | 每个 InteractionEvent 节点通过 `src` 和 `dst` 边关联到场景层实体：
+ 351 | InteractionEvent -[src]-> VehicleEntity
+InteractionEvent -[dst]-> VehicleEntity / PedestrianEntity / TrafficLightEntity / RoadElementEntity
+ 352 | 3.6.2 行为关系引用场景层关系
+ 353 | 行为关系边携带 `source_relations` 属性，记录其依赖的场景层关系 ID 链：
+ 354 | (Vehicle v)-[following {
+    source_relations: [in_lane_id_2048, ahead_of_id_2048]
+}]->(Vehicle w)
+ 355 | 3.6.3 时态一致性
+ 356 | 行为关系的时间区间 [frame_start, frame_end] 必须是其依赖的场景层关系连续满足的时间区间的子集：
+ 357 | ∀ t ∈ [frame_start, frame_end]:
+    存在场景层关系 (v,in_lane,w,t) ∧ (v,ahead_of,w,t)
+ 358 | ---
+ 359 | 3.7 示例三元组
+ 360 | 3.7.1 跟驰行为
+ 361 | // 节点行
+(inte_veh123_veh124_following_2048:Interaction {
+    interaction_id: "inte_veh123_veh124_following_2048",
+    interaction_type: "following",
+    frame_start: 2048, frame_end: 2070,
+    duration_frames: 22,
+    state: "active",
+    severity: 0.6,
+    related_rule: "R13"
+})
+
+// 关系行
+(Vehicle {vehicle_id: 123})
+-[following {
+    frame_id: 2048, distance: 12.5, relative_speed: 0.3, TTC: 41.7
+}]->
+(Vehicle {vehicle_id: 124})
+
+// 节点+边关联
+(inte_veh123_veh124_following_2048)
+-[manifestsAs {relation_type: "following"}]->
+  (Vehicle {vehicle_id: 123})-[following]->(Vehicle {vehicle_id: 124})
+
+// 行为节点引用场景实体
+(inte_veh123_veh124_following_2048)-[src]->(Vehicle {vehicle_id: 123})
+(inte_veh123_veh124_following_2048)-[dst]->(Vehicle {vehicle_id: 124})
+ 362 | 谓词式：
+ 363 | 节点：`InteractionEvent("int_veh123_veh124_following_2048", type=following, [2048,2070])`
+ 364 | 边：`Following(Veh_123, Veh_124, t)`, ∀ t ∈ [2048, 2070]
+ 365 | 3.7.2 让行行为
+ 366 | (Vehicle {vehicle_id: 123})
+-[yielding_to {
+    frame_id: 2048, distance: 8.2, ped_action: "Walking", ego_speed: 0.6
+}]->
+(Pedestrian {pedestrian_id: 45})
+ 367 | 谓词式：`YieldingTo(Veh_123, Ped_45, Frame_2048)`
+ 368 | ---
+ 369 | 3.8 与 v8.3 方案章节映射
+ 370 | 第4章 四、规则层设计
+ 371 | 4.1 设计目标
+ 372 | 规则层是图谱语义抽象的最高层，回答"这些行为合不合规、危不危险"。其核心定位：
+ 373 | ---
+ 374 | 4.2 规则层内部子层划分
+ 375 | 规则层内部分为两个互补子层：
+ 376 | ┌──────────────────────────────────────────────────────┐
+│                   规则层 (Rule Layer)                │
+│                                                      │
+│  ┌────────────────────┐  ┌─────────────────────────┐│
+│  │   RSS 子层         │  │  交通法规/场景子层      ││
+│  │   (物理安全校验)   │  │  (行为合规校验)         ││
+│  │                    │  │                         ││
+│  │  纵向安全距离      │  │  R1  行人优先           ││
+│  │  横向安全距离      │  │  R2  闯红灯             ││
+│  │  反应不当判定      │  │  R3  实线变道           ││
+│  │  责任归因          │  │  R4  对向会车违规       ││
+│  │                    │  │  R5  逆行               ││
+│  │  覆盖：物理碰撞    │  │  R6  违规掉头           ││
+│  │  防护的前置校验    │  │  R7  路口未让行         ││
+│  │                    │  │  R8  弱势参与者保护     ││
+│  │                    │  │  R9  学区限速           ││
+│  │                    │  │  R10 高速公路限速       ││
+│  │                    │  │  R11 恶劣天气限速       ││
+│  │                    │  │  R12 恶劣天气限速       ││
+│  │                    │  │  R13 禁停               ││
+│  │  理论基础：RSS     │  │  R14 违反标志           ││
+│  │  Shalev-Shwartz    │  │  R15 违反标线           ││
+│  │  et al. 2017       │  │  R16 黄灯抢行           ││
+│  │                    │  │  R17 不按规定车道       ││
+│  │                    │  │  R18 不按导向           ││
+│  └────────────────────┘  └─────────────────────────┘│
+│                                                      │
+│  输出层 → SafetyViolation/RuleInstance 节点          │
+│         → supportedByEvidence 边 → 反向插入图谱        │
+└──────────────────────────────────────────────────────┘
+ 377 | ---
+ 378 | 4.3 双表达对齐：节点 + 边双轨
+ 379 | 依据"节点+边双轨"原则，规则层每条规则触发实例同时存在两套表达：
+ 380 | 4.3.1 节点表达（RuleInstance / SafetyViolation）
+ 381 | (:SafetyViolation {
+    sv_id: "sv_R13_2048_veh123_veh124",
+    rule_code: "R13",
+    rule_name: "SafeDistanceViolation",
+    frame_id: 2048,
+    timestamp: 102.4,
+    severity: 0.85,
+    predicate_str: "DangerousState(Veh_123, Veh_124, Frame_2048)",
+    evidence_path: ["in_lane", "ahead_of", "longitudinal_distance"],
+    related_actors: [123, 124]
+})
+ 382 | 4.3.2 关系表达（违规边）
+ 383 | (Veh_123)-[violates {
+    rule_code: "R13",
+    predicate: "DangerousState",
+    frame_id: 2048,
+    severity: 0.85,
+    sv_id: "sv_R13_2048_veh123_veh124"
+}]->(Veh_124)
+ 384 | 4.3.3 对齐机制
+ 385 | 对应谓词式写法（统一约定）：
+ 386 | 节点属性 `predicate_str = "DangerousState(Veh_123, Veh_124, Frame_2048)"`
+ 387 | 关系边的关系类型 `type = "violates"`，携带 `predicate` 字段记录谓词名
+ 388 | ---
+ 389 | 4.4 规则层节点类型总览
+ 390 | ---
+ 391 | 4.5 规则层关系类型总览
+ 392 | ---
+ 393 | 4.6 与下游模块的对接
+ 394 | 4.6.1 GNN 端的注入
+ 395 | 规则层输出可作为 GNN 的：
+ 396 | **节点特征先验**：SafetyViolation 节点的 severity 作为图中节点的标量特征
+ 397 | **边权重先验**：`violates` 边的 severity 作为邻接矩阵的权重
+ 398 | **注意力 mask**：高严重度区域作为 GNN 注意力的强权重区
+ 399 | 4.6.2 可视化追溯
+ 400 | Neo4j 中通过 `supportedByEvidence` 路径可实现：
+ 401 | MATCH (sv:SafetyViolation)-[se:supportedByEvidence]->(e)<-[r*1..2]-(actor)
+WHERE sv.sv_id = "sv_R13_2048_veh123_veh124"
+RETURN sv, se, e, r, actor
+ 402 | 该路径为异常回放与因果分析提供完整证据链。
+ 403 | 4.7 设计定位
+ 404 | RSS（Responsibility-Sensitive Safety）子层负责车辆间纵横向安全距离的实时校验，提供理论可证明的物理安全先验。
+ 405 | ---
+ 406 | 4.8 RSS 形式化模型
+ 407 | 4.8.1 纵向安全距离
+ 408 | 给定前车 B、后车 A，二者在同一车道且 ahead_of(B,A)，则纵向最小安全距离定义为：
+ 409 | $$
+ 410 | d_{\min}^{\text{long}}(A, B, t) = \max\left(0,\; v_A(t)\cdot\rho + \frac{1}{2} a_{\max,\text{accel}}\cdot \rho^2 + \frac{(v_A(t) + a_{\max,\text{accel}}\cdot\rho)^2}{2\, a_{\min,\text{brake}}} - \frac{v_B(t)^2}{2\, a_{\text{brake}}}\right)
+ 411 | $$
+ 412 | 参数集合：
+ 413 | 纵向危险判定：
+ 414 | $$
+ 415 | \text{SafeDistanceViolation}(A, B, t) \iff d^{\text{long}}(A, B, t) < d_{\min}^{\text{long}}(A, B, t)
+ 416 | $$
+ 417 | 4.8.2 横向安全距离
+ 418 | $$
+ 419 | d_{\min}^{\text{lat}}(A, B, t) = \mu + \frac{v_{\text{lat}, A}(t)^2}{2\, a_{\min,\text{lat,brake}}} + \rho\cdot v_{\text{lat}, A}(t) - \frac{v_{\text{lat}, B}(t)^2}{2\, a_{\min,\text{lat,brake}, B}}
+ 420 | $$
+ 421 | 横向危险判定：
+ 422 | $$
+ 423 | \text{LateralDangerousState}(A, B, t) \iff d^{\text{lat}}(A, B, t) < d_{\min}^{\text{lat}}(A, B, t)
+ 424 | $$
+ 425 | 参数：
+ 426 | 4.8.3 复合状态与责任
+ 427 | $$
+ 428 | \text{DangerousState}(A, B, t) = \text{SafeDistanceViolation}(A, B, t) \lor \text{LateralDangerousState}(A, B, t)
+ 429 | $$
+ 430 | 反应不当公理：若 DangerousState(A,B,t) 在连续 3 帧内 ego.brake < 0.3 则触发：
+ 431 | $$
+ 432 | \text{NoProperResponse}(A, t) = \text{DangerousState}(A, B, t) \land \bigwedge_{k=0}^{2} \text{brake}(A, t+k) < 0.3
+ 433 | $$
+ 434 | 责任归因：
+ 435 | $$
+ 436 | \text{ResponsibleAgent}(A, \text{event}_k) \iff \text{NoProperResponse}(A, t) \land \text{B}(t) \text{ 行为合规}
+ 437 | $$
+ 438 | ---
+ 439 | 4.9 RSS 子层节点设计
+ 440 | 4.9.1 RuleDefinition（RSS 类）
+ 441 | Label: `Rule`
+ 442 | 属性表
+ 443 | 示例
+ 444 | 示例三元组
+ 445 | (:Rule {
+    rule_id: "R13a",
+    rule_name: "SafeDistanceViolation",
+    rule_layer: "RSS",
+    predicate_name: "SafeDistanceViolation",
+    formula_str: "d^long(A,B,t) < d_min^long(A,B,t)"
+})
+-[:usesParam]->
+(:Param {
+    param_id: "rho",
+    name: "反应时间",
+    value: 0.1, unit: "s"
+})
+ 446 | 4.9.2 RuleParameter（RSS 类）
+ 447 | Label: `Param`
+ 448 | 参数清单
+ 449 | 4.9.3 SafetyViolation（RSS 类）
+ 450 | Label: `SafetyViolation`
+ 451 | RSS 触发的 SafetyViolation 子类
+ 452 | 对应谓词式写法（关键约定）：
+ 453 | 节点属性：`predicate_str = "DangerousState(Veh_123, Veh_124, Frame_2048)"`
+ 454 | 关系类型：`violates`，谓词名字段在 `predicate` 属性中
+ 455 | 示例三元组（节点+边双轨对齐）
+ 456 | // 节点表达
+(:SafetyViolation {
+    sv_id: "sv_R13a_2048_veh123_veh124",
+    rule_id: "R13a",
+    rule_layer: "RSS",
+    frame_id: 2048,
+    timestamp: 102.4,
+    src_id: 123, dst_id: 124,
+    severity: 0.78,
+    predicate_str: "DangerousState(Veh_123, Veh_124, Frame_2048)",
+    d_actual: 4.3, d_min: 7.5,
+    evidence_path: ["triple_in_lane_2048_veh123_lane2", "triple_ahead_of_2048_veh124_veh123"]
+})
+
+// 关系表达
+(Vehicle {vehicle_id: 123})
+-[:violates {
+    rule_id: "R13a",
+    predicate: "DangerousState",
+    sv_id: "sv_R13a_2048_veh123_veh124",
+    frame_id: 2048,
+    severity: 0.78
+}]->
+(Vehicle {vehicle_id: 124})
+
+// 节点与规则定义关联
+(:SafetyViolation {sv_id: "sv_R13a_2048_veh123_veh124"})
+-[:definedBy]->
+(:Rule {rule_id: "R13a"})
+
+// 证据链
+(:SafetyViolation {sv_id: "sv_R13a_2048_veh123_veh124"})
+-[:supportedByEvidence {evidence_idx: 0}]->
+(:RelationInstance {id: "triple_in_lane_2048_veh123_lane2"})
+ 457 | ---
+ 458 | 4.10 RSS 规则对应表（包含 R13-R15）
+ 459 | ---
+ 460 | 4.11 CARLA 数据映射与可行性
+ 461 | 4.11.1 RSS 计算所需 CARLA 字段
+ 462 | 4.11.2 实现伪代码
+ 463 | def check_rss_longitudinal(A, B, params, frame_id):
+    d_long = longitudinal_distance(A, B)
+    d_min = max(0, A.speed*params['rho']
+                + 0.5*params['a_max_accel']*params['rho']**2
+                + (A.speed + params['a_max_accel']*params['rho'])**2 / (2*params['a_min_brake_long'])
+                - B.speed**2 / (2*params['a_brake_long']))
+    if d_long < d_min:
+        return SafetyViolation(
+            rule_id="R13a",
+            frame_id=frame_id,
+            src_id=A.id, dst_id=B.id,
+            severity=min(1.0, (d_min - d_long)/max(d_min, 1e-3)),
+            predicate_str=f"DangerousState(Veh_{A.id}, Veh_{B.id}, Frame_{frame_id})",
+            d_actual=d_long, d_min=d_min
+        )
+    return None
+ 464 | 4.11.3 已知限制与应对
+ 465 | ---
+ 466 | 4.12 与交规子层的协作
+ 467 | 4.13 设计定位
+ 468 | 交规子层负责 RSS 未覆盖的行为合规判定，包括信号灯遵守、车道规则、行人优先、限速、禁停等。其形而上学依据为：
+ 469 | ---
+ 470 | 4.14 交通法规选编（R1-R18）
+ 471 | 4.14.1 选编原则
+ 472 | 4.14.2 法规清单
+ 473 | ---
+ 474 | 4.15 形式化判别式
+ 475 | 4.15.1 R1 行人优先（人行横道）
+ 476 | YieldingToPedestrianViolation(A, P, t) ←
+    VehicleEntity(A) ∧ PedestrianEntity(P) ∧
+    is_on_crosswalk(P, t) ∧
+    relative_distance(A, P, t) < 15m ∧
+    speed(A, t) > 0.5 m/s
+ 477 | 4.15.2 R2 闯红灯
+ 478 | RedLightViolation(A, R, t) ←
+    VehicleEntity(A) ∧ RoadElementEntity(R) ∧
+    in_junction(A, R, t) ∧
+    signal_color_at(A, t-Δ) = Red ∧
+    speed(A, t) > 0.3 m/s
+ 479 | 4.15.3 R3 实线变道
+ 480 | IllegalLaneCrossing(A, R, t) ←
+    VehicleEntity(A) ∧ RoadElementEntity(R) ∧
+    LaneInvasionEvent(A, t).crossed_lane_markings 包含 Solid ∧
+    changing_lane(A, t)
+ 481 | 4.15.4 R4 对向会车违规
+ 482 | WrongSideMeetingViolation(A, B, t) ←
+    VehicleEntity(A) ∧ VehicleEntity(B) ∧
+    opposite_direction(A, B, t) ∧
+    is_in_opposite_lane(A, B, t) ∧
+    relative_distance(A, B, t) < 10m
+ 483 | 4.15.5 R5 逆行
+ 484 | IllegalReversing(A, R, t) ←
+    VehicleEntity(A) ∧ RoadElementEntity(R) ∧
+    angle(velocity(A, t), heading(A, t)) > 135° ∧
+    duration(Frame_window(t)) >= 5 帧
+ 485 | 4.15.6 R6 违规掉头
+ 486 | IllegalUturn(A, R, t) ←
+    VehicleEntity(A) ∧ RoadElementEntity(R) ∧
+    in_junction(A, R, t) ∧
+    |Δ heading| 在 [t-30, t] 内 > 180° ∧
+    not exists(合法掉头车道)
+ 487 | 4.15.7 R7 路口未让行
+ 488 | JunctionNoYieldViolation(A, B, t) ←
+    in_junction(A, R, t) ∧ approaching_intersection(A, R, t-Δ) ∧
+    has_priority(B, R, t) ∧ not yielding(A, B, t) ∧ speed(A, t) > 0.3
+ 489 | 4.15.8 R8 弱势参与者保护
+ 490 | VulnerableUserProtectionViolation(A, P, t) ←
+    VehicleEntity(A) ∧ PedestrianEntity(P) ∧
+    weather_severity(t) ∈ {poor, severely_reduced} ∧
+    relative_distance(A, P, t) < 20m ∧ speed(A, t) > 学区限速
+ 491 | 4.15.9 R9 学区限速
+ 492 | SchoolZoneSpeedViolation(A, E, t) ←
+    VehicleEntity(A) ∧ EnvironmentSnapshot(E) ∧
+    A 在 road_id ∈ SchoolZoneSet ∧ speed(A, t) > 30 km/h
+ 493 | 4.15.10 R10 高速公路限速
+ 494 | HighwaySpeedViolation(A, R, t) ←
+    VehicleEntity(A) ∧ RoadElementEntity(R) ∧
+    R.road_type == Highway ∧ (speed(A, t) > 120 km/h ∨ speed(A, t) < 60 km/h)
+ 495 | 4.15.11 R11 恶劣天气限速
+ 496 | WeatherSpeedViolation(A, E, t) ←
+    VehicleEntity(A) ∧ EnvironmentSnapshot(E) ∧
+    E.precipitation > 50 ∧ speed(A, t) > max_allowed(weather_severity)
+ 497 | 阈值表：
+ 498 | 4.15.12 R13 禁停
+ 499 | IllegalStopViolation(A, R, t) ←
+    VehicleEntity(A) ∧ RoadElementEntity(R) ∧
+    speed(A, t) < 0.3 ∧ A ∈ NoStopZone ∧ duration >= 30 帧
+ 500 | 4.15.13 R14 违反交通标志
+ 501 | TrafficSignDisobeyViolation(A, S, t) ←
+    VehicleEntity(A) ∧ TrafficSignEntity(S) ∧
+    approaching_sign(A, S, t) ∧ not behavior_compliant(A, S, t)
+ 502 | 4.15.14 R15 违反标线
+ 503 | MarkingDisobeyViolation(A, R, t) ←
+    VehicleEntity(A) ∧ RoadElementEntity(R) ∧
+    is_at_stop_line(A, R, t) ∧ not stopping(A, t)
+ 504 | 4.15.15 R16 黄灯抢行
+ 505 | AmberLightJumpingViolation(A, TL, t) ←
+    VehicleEntity(A) ∧ TrafficLightEntity(TL) ∧
+    TL.state(t-Δ) Yellow ∧ TL.state(t) Yellow ∧
+    is_at_stop_line(A, R, t-Δ) == False ∧ in_junction(A, R, t) == True
+ 506 | 4.15.16 R17 不按规定车道
+ 507 | WrongLaneViolation(A, R, t) ←
+    VehicleEntity(A) ∧ RoadElementEntity(R) ∧
+    lane_type(R) != Driving ∧ duration(A on R) >= 5 帧
+ 508 | 4.15.17 R18 不按导向车道
+ 509 | WrongDirectionLaneViolation(A, R, t) ←
+    VehicleEntity(A) ∧ RoadElementEntity(R) ∧
+    in_junction(A, R, t) ∧
+    maneuver_action(A, t) != lane_designated_direction(R, t)
+ 510 | ---
+ 511 | 4.16 交规子层节点设计
+ 512 | 4.16.1 RuleDefinition（交规类）
+ 513 | Label: `Rule`
+ 514 | 4.16.2 SafetyViolation（交规类）
+ 515 | Label: `SafetyViolation`
+ 516 | 每条交规违反实例的 SafetyViolation 节点属性与 RSS 类完全相同，唯一区别：
+ 517 | rule_layer = "TrafficLaw"
+ 518 | predicate_str 中的谓词名使用对应交规谓词（如 "RedLightViolation"）
+ 519 | 4.16.3 示例三元组（以 R1 为例）
+ 520 | // 节点
+(:SafetyViolation {
+    sv_id: "sv_R1_2048_veh123_ped45",
+    rule_id: "R1", rule_layer: "TrafficLaw",
+    rule_name: "YieldingToPedestrianViolation",
+    frame_id: 2048, timestamp: 102.4,
+    src_id: 123, dst_id: 45,
+    severity: 0.65,
+    predicate_str: "YieldingToPedestrianViolation(Veh_123, Ped_45, Frame_2048)",
+    evidence_path: ["triple_is_on_crosswalk_2048_ped45", "triple_nearby_pedestrian_2048_veh123_ped45"]
+})
+
+// 边
+(Vehicle {vehicle_id: 123})
+-[:violates {
+    rule_id: "R1", predicate: "YieldingToPedestrianViolation",
+    sv_id: "sv_R1_2048_veh123_ped45",
+    frame_id: 2048, severity: 0.65
+}]->
+(Pedestrian {pedestrian_id: 45})
+
+// 证据链
+(:SafetyViolation {sv_id: "sv_R1_2048_veh123_ped45"})
+-[:supportedByEvidence]->
+(:RelationInstance {id: "triple_is_on_crosswalk_2048_ped45"})
+(:SafetyViolation {sv_id: "sv_R1_2048_veh123_ped45"})
+-[:supportedByEvidence]->
+(:RelationInstance {id: "triple_nearby_pedestrian_2048_veh123_ped45"})
+ 521 | ---
+ 522 | 4.17 交规触发与 CARLA 可行性
+ 523 | ---
+ 524 | 4.18 规则层补充节点与关系
+ 525 | 4.18.1 ResponsibilityAssignment 节点
+ 526 | (:ResponsibilityAssignment {
+    resp_id: "resp_<sv_id>_<actor_id>",
+    sv_id: str,
+    responsible_actor_id: int,
+    reason: str  // 静态理由，如 "ego_violated_RSS_distance", "no_yield_to_pedestrian"
+})
+-[:responsibleFor]->
+(:SafetyViolation {...})
+ 527 | 4.18.2 因果链关系
+ 528 | (:SafetyViolation {sv_id: ...})
+-[:causedBy {reason: "ego_violated_RSS_triggered_aggressive_behavior"}]->
+(:SafetyViolation {sv_id: ...})
+ 529 | 用于复杂场景下"违规—事故—违规"连锁关系的因果追溯，GNN 可消费该路径作异常评估。
+ 530 | 4.19 场景-规则触发对照（场景库视角）
+ 531 | 本节从场景库（§2.14）视角反向查看 §4.14 R1-R18 与 §4.9 RSS 子类在 14 个预置场景中的对应关系。
+ 532 | 4.19.1 RSS 子类 (R13a/R14a/R15a/b) 对应场景
+ 533 | 4.19.2 SafetyViolation 命名空间对照
+ 534 | 4.19.3 阶段 9 消融实验与 baseline 对照
+ 535 | 第5章 五、动态更新机制设计
+ 536 | 5.1 设计目标与定位
+ 537 | 动态更新机制是贯穿三层语义的横向机制，负责"图谱如何被增量演化"。它本身不产生新的语义内容，只负责让三层随时间增量演化。
+ 538 | 5.1.1 设计目标
+ 539 | ---
+ 540 | 5.2 触发条件
+ 541 | 5.2.1 CARLA tick 触发
+ 542 | 每一帧（world.tick()）返回 world_snapshot 时自动触发增量更新流水线：
+ 543 | world.tick() → frame_snapshot → 构建 Δg_t → 执行增量更新 → 规则推理 → 事件反向插入
+ 544 | 5.2.2 时间窗口聚合
+ 545 | 为了行为层的时间模式识别（如 overtaking 需跨 30 帧分析），维持一个滑动窗口：
+ 546 | ---
+ 547 | 5.3 差分结构 Δg_t
+ 548 | 每帧抽取完成后，计算帧差分：
+ 549 | 5.3.1 差分结构定义
+ 550 | Δg_t := {
+    delta_entities,
+    delta_attrs,
+    delta_relations,
+    rule_events
+}
+ 551 | 5.3.2 四类差分项
+ 552 | 实体差分 delta_entities
+ 553 | 判断逻辑：
+ 554 | curr_actors = set(world.get_actors().ids())
+prev_actors = set(prev_frame.actor_ids)
+added = curr_actors - prev_actors
+removed = prev_actors - curr_actors
+unchanged = curr_actors & prev_actors
+ 555 | 属性差分 delta_attrs
+ 556 | 阈值防抖（避免浮点精度导致的冗余更新）：
+ 557 | 关系差分 delta_relations
+ 558 | 关系增删需经过防抖计数器（参见 Task3_行为层/关系防抖设计）。
+ 559 | 规则事件 rule_events
+ 560 | ---
+ 561 | 5.4 四类更新操作
+ 562 | 5.4.1 实体级更新（场景层）
+ 563 | 生命周期标记：
+ 564 | # 进入场景
+CREATE (v:Vehicle {vehicle_id: veh_id, frame_start: frame_id, ...})
+
+# 离开场景（节点保留，加 inactive 标记）
+MATCH (v:Vehicle {vehicle_id: veh_id})
+SET v.frame_end = frame_id, v.is_active = false
+
+# 持续变化属性版本化
+MERGE (v)-[:hasVersion]->(av:AttrVersion {
+    attr: attr_name, value: new_val,
+    valid_from_frame: frame_id, valid_to_frame: frame_id
+})
+ 565 | 5.4.2 属性级更新（场景层）
+ 566 | # 直接更新（默认行为）
+MATCH (v:Vehicle {vehicle_id: veh_id})
+SET v.speed = new_speed, v.speed_valid_from = frame_id
+
+# 版本记录（可选，仅对关键属性）
+MERGE (v)-[:hasVersion]->(av:AttrVersion {
+    attr: "speed", value: new_speed,
+    valid_from_frame: frame_id
+})
+ 567 | 5.4.3 关系级更新（场景层/行为层）
+ 568 | 关系创建/更新（增量合并）：
+ 569 | // 空间关系（同帧更新，不需防抖）
+MERGE (v:Vehicle {vehicle_id: veh_id})-[r:in_lane]->(road:RoadElement {road_id: ..., lane_id: ...})
+SET r.frame_id = $frame_id, r.valid = true
+
+// 行为关系（带防抖）
+MATCH (v:Vehicle {vehicle_id: src_id})-[r:following]->(w:Vehicle {vehicle_id: dst_id})
+WHERE r.valid = true
+SET r.distance = $new_distance, r.frame_id = $frame_id
+ 570 | 5.4.4 规则事件更新（规则层→图谱反向插入）
+ 571 | // 事件节点创建
+MERGE (sv:SafetyViolation {sv_id: $sv_id})
+SET sv.rule_id = $rule_id,
+    sv.frame_id = $frame_id,
+    sv.timestamp = $timestamp,
+    sv.severity = $severity,
+    sv.predicate_str = $predicate_str
+
+// 违规边创建
+MERGE (src:Entity)-[:violates {
+    rule_id: $rule_id, predicate: $predicate_name,
+    sv_id: $sv_id, frame_id: $frame_id, severity: $severity
+}]->(dst:Entity)
+
+// 证据链
+MERGE (sv)-[:supportedByEvidence {evidence_idx: $idx}]->(evidence_triple)
+
+// 规则定义引用
+MERGE (sv)-[:definedBy]->(rule:Rule {rule_id: $rule_id})
+ 572 | ---
+ 573 | 5.5 增量更新算法
+ 574 | 5.5.1 单帧增量更新主流程
+ 575 | def incremental_update(frame_id, G_prev, Δg_t, neo4j_conn):
+    """
+    输入: 前帧图谱 G_prev, 帧差分 Δg_t, Neo4j 连接
+    输出: 更新后的 G_curr
+    """
+    # 1. 实体更新
+    for actor in Δg_t.delta_entities.added:
+        create_entity_node(actor, frame_id, neo4j_conn)
+    for actor in Δg_t.delta_entities.removed:
+        deactivate_entity(actor, frame_id, neo4j_conn)
+
+    # 2. 属性更新
+    for entity_id, changes in Δg_t.delta_attrs.items():
+        for attr, (old_val, new_val) in changes.items():
+            update_attribute(entity_id, attr, new_val, frame_id, neo4j_conn)
+
+    # 3. 关系更新
+    for rel in Δg_t.delta_relations.added:
+        create_relation(rel, frame_id, neo4j_conn)
+    for rel in Δg_t.delta_relations.removed:
+        deactivate_relation(rel, frame_id, neo4j_conn)
+    for rel in Δg_t.delta_relations.updated:
+        update_relation(rel, frame_id, neo4j_conn)
+
+    # 4. 规则推理
+    rule_results = run_rule_engine(G_prev, Δg_t)
+
+    # 5. 规则事件反向插入
+    for violation in rule_results.new_violations:
+        create_safety_violation_node(violation, neo4j_conn)
+        create_violates_edge(violation, neo4j_conn)
+        create_evidence_chain(violation, neo4j_conn)
+
+    return G_curr
+ 576 | 5.5.2 帧快照数据结构 G_t
+ 577 | ---
+ 578 | 5.6 引用文献与理论支撑
+ 579 | 5.6.1 增量更新理论
+ 580 | 5.6.2 本图谱更新机制的创新点
+ 581 | ---
+ 582 | 5.7 与下游模块接口
+ 583 | 5.7.1 Neo4j 存储层
+ 584 | 输入增量 Δg_t 后，Neo4j 模块执行对应的 MERGE/SET 操作，保证幂等性。
+ 585 | 5.7.2 GNN 数据导出层
+ 586 | 从 Neo4j 导出时间窗口内 G_t 序列，转为 PyG/DGL 格式：
+ 587 | 5.7.3 评估脚本
+ 588 | 将增量更新结果与 CARLA ground truth（碰撞事件、lane invasion 事件）进行比对，验证增量更新的正确性。
+ 589 | 第6章 六、Neo4j存储与查询设计
+ 590 | 6.1 图数据库选型
+ 591 | 6.1.1 选型论证
+ 592 | 选型结论：本研究优先使用 Neo4j 5.x 社区版，原因如下：
+ 593 | 三层语义结构对应多标签节点，属性图模型天然契合
+ 594 | 时态属性通过 AttrVersion 节点 + 索引实现，Neo4j 性能足够
+ 595 | Cypher 子图查询语法简洁，便于后续 GNN 数据导出
+ 596 | 提供内置可视化界面（Neo4j Browser、Bloom），支持异常路径直观追溯
+ 597 | 6.1.2 部署架构
+ 598 | ┌─────────────┐     ┌──────────────┐     ┌──────────────────┐
+│ CARLA       │ →  │ Python 抽取  │ →  │ Neo4j 5.x        │
+│ 0.9.16      │     │ 模块         │     │ (Bolt+HTTP)      │
+│ 服务器      │     └──────────────┘     └────────┬─────────┘
+│                                         │        │
+│ ubuntu 20.04 / GPU                      │        ▼
+│                                   ┌─────┐  ┌──────────────┐
+│                                   │ 浏览器 │  │ GNN 训练     │
+│                                   │ 可视化 │  │ PyG/DGL      │
+│                                   └─────┘  └──────────────┘
+ 599 | 6.1.3 连接参数
+ 600 | ---
+ 601 | 6.2 Schema 设计
+ 602 | 6.2.1 节点标签
+ 603 | 6.2.2 关系类型
+ 604 | 6.2.3 索引与约束
+ 605 | // 唯一性约束
+CREATE CONSTRAINT vehicle_id_unique IF NOT EXISTS
+FOR (v:Vehicle) REQUIRE v.vehicle_id IS UNIQUE;
+
+CREATE CONSTRAINT pedestrian_id_unique IF NOT EXISTS
+FOR (p:Pedestrian) REQUIRE p.pedestrian_id IS UNIQUE;
+
+CREATE CONSTRAINT safety_violation_id_unique IF NOT EXISTS
+FOR (sv:SafetyViolation) REQUIRE sv.sv_id IS UNIQUE;
+
+CREATE CONSTRAINT rule_id_unique IF NOT EXISTS
+FOR (r:Rule) REQUIRE r.rule_id IS UNIQUE;
+
+// 索引（非唯一）
+CREATE INDEX frame_id_idx IF NOT EXISTS
+FOR (s:SceneSnapshot) ON (s.frame_id);
+
+CREATE INDEX sv_frame_idx IF NOT EXISTS
+FOR (sv:SafetyViolation) ON (sv.frame_id);
+
+CREATE INDEX sv_rule_idx IF NOT EXISTS
+FOR (sv:SafetyViolation) ON (sv.rule_id);
+
+CREATE INDEX vehicle_vehicle_id_idx IF NOT EXISTS
+FOR (v:Vehicle) ON (v.vehicle_id);
+ 606 | 6.2.4 节点属性序列化约定
+ 607 | 所有 float 字段保留 6 位小数
+ 608 | 时间戳统一 ISO 8601 + frame_id 双标记
+ 609 | list 字段以 JSON 数组形式存储
+ 610 | 缺省字段使用 null（保持字段存在以便索引统一）
+ 611 | ---
+ 612 | 6.3 子图查询设计
+ 613 | 6.3.1 时间切片查询（某帧的所有事实）
+ 614 | // 查询第 2048 帧的所有车辆及所在车道
+MATCH (v:Vehicle)-[r:in_lane]->(road:RoadElementEntity)
+WHERE r.frame_id = 2048
+RETURN v, r, road
+ 615 | 6.3.2 实体生命周期查询
+ 616 | // 查询某辆车的完整生命周期
+MATCH (v:Vehicle {vehicle_id: 123})
+MATCH (v)-[r:in_lane]->(road)
+MATCH (v)-[f:following]->(w)
+WHERE r.frame_id BETWEEN v.frame_start AND coalesce(v.frame_end, 999999999)
+   AND f.frame_id BETWEEN v.frame_start AND coalesce(v.frame_end, 999999999)
+RETURN v, r, road, f, w
+ORDER BY r.frame_id
+ 617 | 6.3.3 异常路径追溯（SafetyViolation 证据链）
+ 618 | // 查询某 SafetyViolation 的完整证据链
+MATCH (sv:SafetyViolation {sv_id: "sv_R13a_2048_veh123_veh124"})
+MATCH (sv)-[:definedBy]->(rule:Rule)
+OPTIONAL MATCH (sv)-[:supportedByEvidence]->(evidence)
+OPTIONAL MATCH (sv)-[v2:violates_edge]->()  // 关系表达
+OPTIONAL MATCH (sv)<-[:responsibleFor]-(ra:Responsibility)
+RETURN sv, rule, evidence, ra
+ 619 | 6.3.4 时空异常聚合查询
+ 620 | // 查询某段时间内的所有 SafetyViolation,按严重度排序
+MATCH (sv:SafetyViolation)
+WHERE sv.frame_id >= 2048 AND sv.frame_id <= 4096
+  AND sv.rule_layer IN ['RSS', 'TrafficLaw']
+RETURN sv.rule_id, count(*) as count, avg(sv.severity) as avg_sev
+ORDER BY avg_sev DESC
+ 621 | 6.3.5 时空感知子图召回（GNN 准备）
+ 622 | // 召回某时段某路段相关的 k-hop 子图
+MATCH (center:RoadElementEntity {road_id: 5})
+MATCH (center)<-[r:in_lane]-(v:Vehicle)
+WHERE r.frame_id >= 2048 AND r.frame_id <= 2070
+WITH v, r, center
+OPTIONAL MATCH (v)-[b:following]->(w:Vehicle)
+WHERE b.frame_id >= 2048 AND b.frame_id <= 2070
+OPTIONAL MATCH (v)-[sv:violates]->(w2)
+WHERE sv.frame_id >= 2048 AND sv.frame_id <= 2070
+RETURN v, b, w, sv, w2, r, center
+ 623 | ---
+ 624 | 6.4 可视化与可追溯
+ 625 | 6.4.1 内置可视化
+ 626 | Neo4j Browser 提供原生图形可视化，按节点类型分配颜色：
+ 627 | 6.4.2 异常回放界面
+ 628 | 通过 Cypher 查询特定 sv_id 的全部证据链，再按 frame_id 排序，导入 web 前端做帧间动画：
+ 629 | MATCH (sv:SafetyViolation {sv_id: $sv_id})-[:supportedByEvidence]->(e)
+RETURN e ORDER BY e.frame_id
+ 630 | 6.4.3 时态查询接口
+ 631 | 查询：在 [t_start, t_end] 内,entity_id 的所有属性版本
+MATCH (e:Entity {entity_id: $eid})-[:hasVersion]->(av:AttrVersion)
+WHERE av.valid_from_frame <= $t_end
+  AND coalesce(av.valid_to_frame, 999999999) >= $t_start
+RETURN av ORDER BY av.valid_from_frame
+ 632 | ---
+ 633 | 6.5 与 GNN 训练的接口
+ 634 | 6.5.1 数据导出流程
+ 635 | def export_for_gnn(neo4j_conn, frame_start, frame_end, road_id):
+    cypher = """
+    MATCH (center:RoadElementEntity {road_id: $road_id})
+    MATCH (center)<-[r:in_lane]-(v:Vehicle)
+    WHERE r.frame_id >= $frame_start AND r.frame_id <= $frame_end
+    OPTIONAL MATCH (v)-[b:following]->(w:Vehicle)
+      WHERE b.frame_id >= $frame_start AND b.frame_id <= $frame_end
+    OPTIONAL MATCH (v)-[sv:violates]->()
+      WHERE sv.frame_id >= $frame_start AND sv.frame_id <= $frame_end
+    RETURN v, b, w, sv, r, center
+    """
+    result = neo4j_conn.run(cypher, road_id=road_id, frame_start=frame_start, frame_end=frame_end)
+    return to_pyg_format(result)
+ 636 | 6.5.2 子图采样策略
+ 637 | ---
+ 638 | 6.6 性能预估
+ 639 | 6.6.1 节点数量预估
+ 640 | 6.6.2 索引效率预估
+ 641 | 6.6.3 写入吞吐
+ 642 | 20Hz 单帧（每帧约 200 条变更）的更新吞吐：< 2ms/帧，远低于 50ms 时限。
+ 643 | 第7章 七、CARLA数据提取与对接设计
+ 644 | 7.1 CARLA 0.9.16 真值数据源清单
+ 645 | 7.1.1 Actor 系统（移动实体）
+ 646 | CARLA 中所有移动实体（车辆、行人）继承自 `carla.Actor`，统一接口：
+ 647 | 7.1.2 Waypoint 系统（道路拓扑）
+ 648 | 路口内 waypoint 不连续的应对：
+ 649 | 用 `get_junction().get_waypoints(carla.LaneType.Driving)` 做离散采样
+ 650 | 或改用 bbox 多边形做空间包含判断
+ 651 | 7.1.3 TrafficLight 系统
+ 652 | 车道-灯控制映射（需预处理）：
+ 653 | def build_traffic_light_lane_map(carla_map):
+    tl_lane_map = {}
+    for wp in carla_map.generate_waypoints(2.0):
+        if wp.lane_type == carla.LaneType.Driving:
+            tl = getattr(wp, 'traffic_light', None)
+            if tl is not None:
+                tl_lane_map.setdefault(tl.id, set()).add(wp.lane_id)
+    return tl_lane_map  # {tl_id: {lane_id_1, lane_id_2, ...}}
+ 654 | 7.1.4 Collision / Invasion 传感器
+ 655 | 传感器挂载：
+ 656 | collision_sensor = ego_vehicle.listen(carla.Color(255,0,0))
+def on_collision(event):
+    print(event.other_actor, event.impact.normal, event.impact.force)
+ 657 | 7.1.5 天气系统
+ 658 | 7.1.6 数据可用性分级汇总
+ 659 | ---
+ 660 | 7.2 提取模块架构
+ 661 | 7.2.1 模块划分
+ 662 | ┌─────────────────────────────────────────────┐
+│              CARLA 0.9.16 仿真世界           │
+└──────────────┬──────────────────────────────┘
+               │ world.tick()
+               ▼
+┌─────────────────────────────────────────────┐
+│        模块 A：Actor 提取器                 │
+│  - VehicleActorExtractor                    │
+│  - PedestrianActorExtractor                 │
+│  - TrafficLightExtractor                    │
+└──────────────┬──────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────┐
+│        模块 B：环境与拓扑提取器             │
+│  - WeatherExtractor                         │
+│  - RoadTopologyExtractor                    │
+│  - WaypointService                          │
+└──────────────┬──────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────┐
+│        模块 C：属性计算引擎                 │
+│  - DerivedAttributeCalculator               │
+│    (speed, heading, bbox距离, TTC...)       │
+└──────────────┬──────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────┐
+│        模块 D：关系生成器                   │
+│  - SpatialRelationGenerator（场景层）       │
+│  - BehaviorRelationGenerator（行为层+防抖） │
+│  - RuleEngine（规则层+RSS+交规）            │
+└──────────────┬──────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────┐
+│        模块 E：帧快照构建器                 │
+│  - 帧快照 G_t + 差分 Δg_t                 │
+└──────────────┬──────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────┐
+│        模块 F：Neo4j 写入器                │
+│  - EntityWriter / RelationWriter            │
+│  - ViolationWriter                          │
+└─────────────────────────────────────────────┘
+ 663 | 7.2.2 数据流
+ 664 | CARLA tick()
+  │
+  ├→ ActorExtractor.extract()     → {vehicle_list, pedestrian_list, tl_list}
+  ├→ WeatherExtractor.extract()   → {weather_snapshot}
+  ├→ RoadTopologyExtractor.init() → {lane_graph, tl_lane_map} (首帧预处理)
+  │
+  ├→ DerivedAttributeCalculator.compute() → {enhanced_vehicles, enhanced_peds}
+  ├→ SpatialRelationGenerator.generate()  → {spatial_rels}
+  ├→ BehaviorRelationGenerator.generate() → {behavior_rels}  (含防抖)
+  │
+  ├→ RuleEngine.run()             → {new_violations}
+  │
+  ├→ SnapshotBuilder.build()      → {G_t, Δg_t}
+  │
+  └→ Neo4jWriter.write(G_t, Δg_t) → Neo4j update
+ 665 | ---
+ 666 | 7.3 实体-关系-Neo4j 节点/边映射
+ 667 | 7.3.1 场景层映射
+ 668 | 7.3.2 行为层映射
+ 669 | 7.3.3 规则层映射
+ 670 | ---
+ 671 | 7.4 三元组生成流水线
+ 672 | 7.4.1 流水线代码框架
+ 673 | class KGConstructionPipeline:
+    def __init__(self, carla_world, neo4j_driver):
+        self.world = carla_world
+        self.neo4j = neo4j_driver
+        self.prev_snapshot = None
+        self.debouncers = {}  # 行为关系防抖
+        self.tl_lane_map = build_traffic_light_lane_map(carla_world.get_map())
+
+    def run_frame(self, frame_id):
+        snapshot = self._extract_frame(frame_id)
+        delta = self._compute_delta(frame_id, snapshot, self.prev_snapshot)
+        self._write_to_neo4j(snapshot, delta)
+        violations = self._run_rule_engine(snapshot)
+        self._write_violations(violations, neo4j=self.neo4j)
+        self.prev_snapshot = snapshot
+
+    def _extract_frame(self, frame_id):
+        # 提取所有 actor
+        vehicles = [extract_vehicle(v) for v in self.world.get_actors().filter('vehicle.*')]
+        peds = [extract_pedestrian(p) for p in self.world.get_actors().filter('walker.*')]
+        tls = [extract_traffic_light(t) for t in self.world.get_actors().filter('traffic.*')]
+        weather = extract_weather(self.world.get_weather())
+        # 计算派生属性
+        for v in vehicles:
+            compute_derived_attributes(v, self.world.get_map(), self.tl_lane_map)
+        # 生成空间关系
+        spatial_rels = generate_spatial_relations(vehicles, peds, tls, self.world.get_map())
+        # 生成行为关系（带防抖）
+        behavior_rels = generate_behavior_relations(
+            vehicles, peds, spatial_rels, self.debouncers, frame_id
+        )
+        return FrameSnapshot(
+            frame_id=frame_id,
+            vehicles=vehicles, peds=peds, tls=tls,
+            weather=weather, spatial_rels=spatial_rels,
+            behavior_rels=behavior_rels
+        )
+
+    def _run_rule_engine(self, snapshot):
+        violations = []
+        # RSS 子层
+        violations += check_rss_longitudinal(snapshot.vehicles, self.params)
+        violations += check_rss_lateral(snapshot.vehicles, self.params)
+        violations += check_no_proper_response(snapshot, self.prev_snapshot)
+        # 交规子层
+        violations += check_red_light(snapshot, self.tl_lane_map)
+        violations += check_lane_crossing(snapshot)
+        violations += check_yielding_pedestrian(snapshot)
+        violations += check_speed_violation(snapshot, snapshot.weather)
+        violations += check_illegal_u_turn(snapshot)
+        violations += check_junction_yield(snapshot)
+        return violations
+ 674 | 7.4.2 Neo4j 写入示例
+ 675 | def write_vehicle_to_neo4j(neo4j_driver, vehicle, frame_id):
+    query = """
+    MERGE (v:Vehicle {vehicle_id: $vehicle_id})
+    ON CREATE SET v.frame_start = $frame_id, v.is_active = true
+    SET v.vehicle_type = $vehicle_type,
+        v.location_x = $location_x, v.location_y = $location_y, v.location_z = $location_z,
+        v.velocity_x = $velocity_x, v.velocity_y = $velocity_y, v.velocity_z = $velocity_z,
+        v.speed = $speed, v.speed_kmh = $speed_kmh,
+        v.heading_rad = $heading_rad,
+        v.throttle = $throttle, v.brake = $brake, v.steer = $steer,
+        v.bbox_extent_x = $bbox_extent_x, v.bbox_extent_y = $bbox_extent_y,
+        v.is_ego = $is_ego,
+        v.last_active_frame = $frame_id
+    RETURN v
+    """
+    neo4j_driver.run(query, **vehicle.to_dict(), frame_id=frame_id)
+
+def write_relation_to_neo4j(neo4j_driver, src_id, dst_id, rel_type, attrs, frame_id):
+    query = f"""
+    MATCH (src {{vehicle_id: $src_id}})
+    MATCH (dst {{vehicle_id: $dst_id}})
+    MERGE (src)-[r:{rel_type}]->(dst)
+    SET r.frame_id = $frame_id,
+        r.valid = true,
+        r.last_update_frame = $frame_id,
+        r += $attrs
+    RETURN r
+    """
+    neo4j_driver.run(query, src_id=src_id, dst_id=dst_id, attrs=attrs, frame_id=frame_id)
+ 676 | ---
+ 677 | 7.5 完整 CARLA API 映射速查表
+ 678 | ---
+ 679 | 7.6 已知限制与应对汇总
+ 680 | ---
+ 681 | 7.7 与实验流程的对接
+ 682 | 本模块输出直接接入：
