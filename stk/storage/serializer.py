@@ -48,7 +48,8 @@ def relation_merge_cypher(rel_type: str) -> str:
 def serialize_graph(frame_snapshot, with_relations: bool = True,
                     maneuvers: List = None,
                     interactions: List = None,
-                    rule_out: Dict = None) -> Dict[str, Any]:
+                    rule_out: Dict = None,
+                    merge_violations: bool = True) -> Dict[str, Any]:
     """把单帧 (或帧列表) 的场景快照序列化为 {nodes, edges} JSON.
 
     输入可以是:
@@ -63,6 +64,11 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
     输出:
       {"nodes": [{"id","type","frame","attrs"}, ...],
        "edges": [{"src_id","dst_id","type","frame","attrs"}, ...]}
+
+    merge_violations=True 时:
+      同 (rule_code, src_id, dst_id) 的多次触发合并为单个 SafetyViolation,
+      ID 改为 sv_<rule_code>_<src>_<dst>, attrs 含 fires_n_frames/first_frame/
+      last_frame/fired_frames 列表。ResponsibilityAssignment 同步合并。
     """
     if isinstance(frame_snapshot, list):
         frames = frame_snapshot
@@ -98,6 +104,8 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
     nodes = {}
     edges = {}
 
+    sv_buffer: Dict[int, List] = {}
+    ra_buffer: Dict[int, List] = {}
     for snap in frames:
         fid = snap.get("frame_id", 0)
 
@@ -191,34 +199,36 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
                 _add_edge(edges, {"src_id": eid, "dst_id": dst, "relation_type": "dst", "frame_id": fid}, fid)
 
         # --- SafetyViolation nodes ---
-        for sv in vio_map.get(fid, []):
-            eid = getattr(sv, "entity_id", sv.get("entity_id", "")) if isinstance(sv, dict) else sv.entity_id
-            if not eid:
-                continue
-            eid = str(eid)
-            nodes[eid] = {"id": eid, "type": "SafetyViolation",
-                          "first_frame": fid, "last_frame": fid,
-                          "attrs": _flatten_attrs(sv.to_dict() if hasattr(sv, "to_dict") else sv)}
-            # 隐式 violates 边: sv -> dst
-            dst = str(getattr(sv, "dst_id", sv.get("dst_id", ""))) if isinstance(sv, dict) else str(sv.dst_id)
-            if dst:
-                _add_edge(edges, {"src_id": eid, "dst_id": dst,
-                                  "relation_type": "violates", "frame_id": fid}, fid)
+        if merge_violations:
+            # 后处理模式: 暂存 list, 在所有帧处理完后做按 (rule,src,dst) 合并
+            sv_buffer.setdefault(fid, []).extend(vio_map.get(fid, []))
+            ra_buffer.setdefault(fid, []).extend(resp_map.get(fid, []))
+        else:
+            for sv in vio_map.get(fid, []):
+                eid = getattr(sv, "entity_id", sv.get("entity_id", "")) if isinstance(sv, dict) else sv.entity_id
+                if not eid:
+                    continue
+                eid = str(eid)
+                nodes[eid] = {"id": eid, "type": "SafetyViolation",
+                              "first_frame": fid, "last_frame": fid,
+                              "attrs": _flatten_attrs(sv.to_dict() if hasattr(sv, "to_dict") else sv)}
+                dst = str(getattr(sv, "dst_id", sv.get("dst_id", ""))) if isinstance(sv, dict) else str(sv.dst_id)
+                if dst:
+                    _add_edge(edges, {"src_id": eid, "dst_id": dst,
+                                      "relation_type": "violates", "frame_id": fid}, fid)
 
-        # --- ResponsibilityAssignment nodes ---
-        for ra in resp_map.get(fid, []):
-            eid = getattr(ra, "entity_id", ra.get("entity_id", "")) if isinstance(ra, dict) else ra.entity_id
-            if not eid:
-                continue
-            eid = str(eid)
-            nodes[eid] = {"id": eid, "type": "ResponsibilityAssignment",
-                          "first_frame": fid, "last_frame": fid,
-                          "attrs": _flatten_attrs(ra.to_dict() if hasattr(ra, "to_dict") else ra)}
-            # 隐式 responsibleFor 边: ra -> actor
-            actor = str(getattr(ra, "responsible_actor_id", ra.get("responsible_actor_id", ""))) if isinstance(ra, dict) else str(ra.responsible_actor_id)
-            if actor:
-                _add_edge(edges, {"src_id": eid, "dst_id": actor,
-                                  "relation_type": "responsibleFor", "frame_id": fid}, fid)
+            for ra in resp_map.get(fid, []):
+                eid = getattr(ra, "entity_id", ra.get("entity_id", "")) if isinstance(ra, dict) else ra.entity_id
+                if not eid:
+                    continue
+                eid = str(eid)
+                nodes[eid] = {"id": eid, "type": "ResponsibilityAssignment",
+                              "first_frame": fid, "last_frame": fid,
+                              "attrs": _flatten_attrs(ra.to_dict() if hasattr(ra, "to_dict") else ra)}
+                actor = str(getattr(ra, "responsible_actor_id", ra.get("responsible_actor_id", ""))) if isinstance(ra, dict) else str(ra.responsible_actor_id)
+                if actor:
+                    _add_edge(edges, {"src_id": eid, "dst_id": actor,
+                                      "relation_type": "responsibleFor", "frame_id": fid}, fid)
 
         # --- Scene relations ---
         if with_relations:
@@ -245,6 +255,9 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
                 pid = p.get("entity_id") or p.get("id")
                 if pid:
                     _add_edge(edges, {"src_id": scene_id, "dst_id": str(pid), "relation_type": "containsPedestrian", "frame_id": fid}, fid)
+
+    if merge_violations and sv_buffer:
+        _merge_violations_into_nodes(nodes, edges, sv_buffer, ra_buffer)
 
     return {"nodes": list(nodes.values()), "edges": list(edges.values())}
 
@@ -284,6 +297,138 @@ def _merge_attrs(dest, src):
         if k in src if isinstance(src, dict) else hasattr(src, k):
             val = src[k] if isinstance(src, dict) else getattr(src, k)
             dest[k] = val
+
+
+
+
+def _merge_violations_into_nodes(nodes, edges, sv_buffer, ra_buffer):
+    """把按帧切分的 SafetyViolation/ResponsibilityAssignment 合并成跨帧实例.
+
+    合并键: (rule_code, src_id, dst_id)
+      -> 新 ID: sv_<rule_code>_<src_id>_<dst_id>
+      -> attrs: rule_code, rule_name, rule_layer, src_id, dst_id,
+                severity_max, severity_avg, fired_count, fired_frames,
+                first_frame, last_frame, predicate_str
+      -> 边:   sv -> dst (violates, attrs.fired_frames = [...])
+
+    同步合并 ResponsibilityAssignment: 按 (sv_merged_id, responsible_actor_id)
+      -> 新 ID: resp_<sv_merged_id>_<actor>
+      -> attrs: reasons_set, first_frame, last_frame, fired_frames
+      -> 边:   resp -> actor (responsibleFor)
+    """
+    import collections
+
+    # 1) 按合并键 group 所有 SV
+    sv_groups = collections.defaultdict(list)
+    sv_frames_map = collections.defaultdict(list)
+    sv_first_frame = {}
+    sv_last_frame = {}
+
+    for fid, sv_list in sv_buffer.items():
+        for sv in sv_list:
+            rule_code = getattr(sv, "rule_code") if not isinstance(sv, dict) else sv.get("rule_code", "")
+            src_id = str(getattr(sv, "src_id", "") if not isinstance(sv, dict) else sv.get("src_id", ""))
+            dst_id = str(getattr(sv, "dst_id", "") if not isinstance(sv, dict) else sv.get("dst_id", ""))
+            key = (rule_code, src_id, dst_id)
+            sv_groups[key].append(sv)
+            sv_frames_map[key].append(fid)
+            sv_first_frame[key] = min(sv_first_frame.get(key, fid), fid)
+            sv_last_frame[key] = max(sv_last_frame.get(key, fid), fid)
+
+    # 2) 生成合并的 SV 节点 + 边
+    for (rule_code, src_id, dst_id), svs in sv_groups.items():
+        if not rule_code:
+            # 没有 rule_code 的 fallback 用原 ID,不合并
+            for sv in svs:
+                eid_eid = str(getattr(sv, "entity_id", sv.get("entity_id", "")) if isinstance(sv, dict) else sv.entity_id)
+                nodes[eid_eid] = {"id": eid_eid, "type": "SafetyViolation",
+                                   "first_frame": sv_first_frame[(rule_code, src_id, dst_id)],
+                                   "last_frame": sv_last_frame[(rule_code, src_id, dst_id)],
+                                   "attrs": _flatten_attrs(sv.to_dict() if hasattr(sv, "to_dict") else sv)}
+            continue
+
+        merged_id = f"sv_{rule_code}_{src_id}_{dst_id}"
+        first_sv = svs[0]
+        attrs = {
+            "sv_id": merged_id,
+            "rule_code": rule_code,
+            "rule_name": getattr(first_sv, "rule_name", first_sv.get("rule_name", "") if isinstance(first_sv, dict) else ""),
+            "rule_layer": getattr(first_sv, "rule_layer", first_sv.get("rule_layer", "") if isinstance(first_sv, dict) else ""),
+            "src_id": src_id,
+            "dst_id": dst_id,
+            "severity_max": max(getattr(sv, "severity", sv.get("severity", 0) if isinstance(sv, dict) else 0) for sv in svs),
+            "severity_avg": sum(getattr(sv, "severity", sv.get("severity", 0) if isinstance(sv, dict) else 0) for sv in svs) / len(svs),
+            "fired_count": len(svs),
+            "fired_frames": sorted(sv_frames_map[(rule_code, src_id, dst_id)]),
+            "first_frame": sv_first_frame[(rule_code, src_id, dst_id)],
+            "last_frame": sv_last_frame[(rule_code, src_id, dst_id)],
+            "predicate_str": getattr(first_sv, "predicate_str", first_sv.get("predicate_str", "") if isinstance(first_sv, dict) else ""),
+        }
+        nodes[merged_id] = {"id": merged_id, "type": "SafetyViolation",
+                            "first_frame": attrs["first_frame"],
+                            "last_frame": attrs["last_frame"],
+                            "attrs": attrs}
+        if dst_id:
+            edges[(merged_id, dst_id, "violates")] = {
+                "src_id": merged_id, "dst_id": dst_id, "type": "violates",
+                "first_frame": attrs["first_frame"], "last_frame": attrs["last_frame"],
+                "frame_id": attrs["first_frame"], "attrs": {"fired_frames": attrs["fired_frames"]},
+            }
+
+    # 3) 同步合并 ResponsibilityAssignment: 按 (sv_merged_id, actor)
+    # 建立 original_sv_id -> merged_sv_id 映射
+    sv_id_map = {}
+    for (rule_code, src_id, dst_id), svs in sv_groups.items():
+        if not rule_code:
+            continue
+        merged = f"sv_{rule_code}_{src_id}_{dst_id}"
+        for sv in svs:
+            orig_id = str(getattr(sv, "entity_id", sv.get("entity_id", "") if isinstance(sv, dict) else ""))
+            if orig_id:
+                sv_id_map[orig_id] = merged
+
+    ra_groups = collections.defaultdict(list)
+    ra_frames_map = collections.defaultdict(list)
+
+    for fid, ra_list in ra_buffer.items():
+        for ra in ra_list:
+            sv_id = str(getattr(ra, "sv_id", ra.get("sv_id", "")) if isinstance(ra, dict) else ra.sv_id)
+            actor = str(getattr(ra, "responsible_actor_id", ra.get("responsible_actor_id", "")) if isinstance(ra, dict) else ra.responsible_actor_id)
+            merged_sv_id = sv_id_map.get(sv_id)
+            if merged_sv_id is None:
+                continue
+            key = (merged_sv_id, actor)
+            ra_groups[key].append(ra)
+            ra_frames_map[key].append(fid)
+
+    for (merged_sv_id, actor), ras in ra_groups.items():
+        merged_resp_id = f"resp_{merged_sv_id}_{actor}"
+        reasons = set()
+        for ra in ras:
+            r = getattr(ra, "reason", ra.get("reason", "") if isinstance(ra, dict) else "")
+            if r:
+                reasons.add(str(r))
+        first_frame = min(ra_frames_map[(merged_sv_id, actor)])
+        last_frame = max(ra_frames_map[(merged_sv_id, actor)])
+        attrs = {
+            "resp_id": merged_resp_id,
+            "sv_id": merged_sv_id,
+            "responsible_actor_id": actor,
+            "reasons": sorted(reasons),
+            "fired_count": len(ras),
+            "fired_frames": sorted(ra_frames_map[(merged_sv_id, actor)]),
+            "first_frame": first_frame,
+            "last_frame": last_frame,
+        }
+        nodes[merged_resp_id] = {"id": merged_resp_id, "type": "ResponsibilityAssignment",
+                                  "first_frame": first_frame, "last_frame": last_frame,
+                                  "attrs": attrs}
+        if actor:
+            edges[(merged_resp_id, actor, "responsibleFor")] = {
+                "src_id": merged_resp_id, "dst_id": actor, "type": "responsibleFor",
+                "first_frame": first_frame, "last_frame": last_frame,
+                "frame_id": first_frame, "attrs": {"fired_frames": attrs["fired_frames"]},
+            }
 
 
 def _add_edge(edges, rel, fid):
