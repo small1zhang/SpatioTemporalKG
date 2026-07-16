@@ -395,6 +395,9 @@ def main():
     rule_enf = RuleEnforcer()
     phase3_beh = []
     phase3_rul = []
+    phase3_maneuvers_raw = []
+    phase3_interactions_raw = []
+    phase3_ruleouts_raw = []
     for snap in phase2_frames:
         veh_str = [{**v, "entity_id": str(v.get("entity_id", v.get("id", "")))} for v in snap["vehicles"]]
         ped_str = [{**p, "entity_id": str(p.get("entity_id", p.get("id", "")))} for p in snap.get("pedestrians", [])]
@@ -407,6 +410,8 @@ def main():
             traffic_lights=tl_str,
             scene_relations=snap.get("scene_rels", []),
         )
+        phase3_maneuvers_raw.extend(beh_out.get("maneuvers", []))
+        phase3_interactions_raw.extend(beh_out.get("interactions", []))
         phase3_beh.append({
             "frame_id": snap["frame_id"],
             "n_maneuvers": len(beh_out.get("maneuvers", [])),
@@ -422,6 +427,9 @@ def main():
             traffic_lights=tl_str,
             scene_rels=snap.get("scene_rels", []),
         )
+        phase3_ruleouts_raw.append({"frame_id": snap["frame_id"],
+                                        "violations": rule_out.get("violations", []),
+                                        "responsibilities": rule_out.get("responsibilities", [])})
         phase3_rul.append({
             "frame_id": snap["frame_id"],
             "n_violations": len(rule_out["violations"]),
@@ -472,7 +480,10 @@ def main():
     t0 = time.time()
     from stk.storage.serializer import serialize_graph
 
-    graph_obj = serialize_graph(phase2_frames, with_relations=True)
+    graph_obj = serialize_graph(phase2_frames, with_relations=True,
+                                maneuvers=phase3_maneuvers_raw,
+                                interactions=phase3_interactions_raw,
+                                rule_out=phase3_ruleouts_raw)
     with open(out_dir / "phase5_graph.json", "w", encoding="utf-8") as f:
         json.dump(graph_obj, f, ensure_ascii=False, indent=2, default=str)
     g_nodes = len(graph_obj.get("nodes", []))
