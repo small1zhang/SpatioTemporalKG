@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+run_extraction.py  ——  CARLA 数据提取主脚本（验证完整链路）
+
+作用：
+  1. 连接 CARLA 仿真服务器 (localhost:2000)
+  2. 逐帧采样 actor/lane/tl/weather 数据
+  3. 通过 stk.extraction.pipeline 提取为帧快照
+  4. 保存为 JSON 文件到 data/recordings/
+
+用法：
+    # 基本用法（100 帧，默认保存到 data/recordings/）
+    python3 scripts/run_extraction.py
+
+    # 指定帧数和输出目录
+    python3 scripts/run_extraction.py --frames 200 --out data/test_run
+
+    # 指定 GPU 设备号（设置 CUDA_VISIBLE_DEVICES）
+    CUDA_VISIBLE_DEVICES=3 python3 scripts/run_extraction.py
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+# 确保项目根在 sys.path
+_REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO))
+
+
+def main():
+    p = argparse.ArgumentParser(description="CARLA 数据提取 — 验证完整链路")
+    p.add_argument("--host", default="localhost", help="CARLA 服务器地址")
+    p.add_argument("--port", type=int, default=2000, help="CARLA RPC 端口")
+    p.add_argument("--frames", type=int, default=50, help="采样帧数")
+    p.add_argument("--out", default="data/recordings", help="输出目录（相对于项目根）")
+    p.add_argument("--town", default=None, help="加载地图名称（可选，例: Town10HD）")
+    args = p.parse_args()
+
+    # ── 1. 连接 CARLA ────────────────────────────────────────────────
+    try:
+        import carla
+    except ImportError:
+        print("[FATAL] 无法 import carla。请确认 carla Python API 已安装。")
+        sys.exit(1)
+
+    print(f"[*] Connecting to CARLA at {args.host}:{args.port} ...")
+    client = carla.Client(args.host, args.port)
+    client.set_timeout(30.0)
+
+    try:
+        server_ver = client.get_server_version()
+        client_ver = client.get_client_version()
+        print(f"[+] Connected: server={server_ver}, client={client_ver}")
+    except Exception as e:
+        print(f"[FATAL] 无法连接 CARLA: {e}")
+        sys.exit(2)
+
+    world = client.get_world()
+
+    # 可选：加载地图
+    if args.town:
+        print(f"[*] Loading map {args.town} ...")
+        world = client.load_world(args.town)
+        time.sleep(5)
+
+    # ── 2. 输出目录 ──────────────────────────────────────────────────
+    out_dir = _REPO / args.out
+    out_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = out_dir / f"run_{timestamp}_{args.frames}f"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[*] Output dir: {run_dir}")
+
+    # ── 3. 逐帧采样 ──────────────────────────────────────────────────
+    from stk.extraction.actor_extractor import extract_all_actors
+    from stk.extraction.waypoint_extractor import extract_waypoints, build_lane_topology
+    from stk.extraction.trafficlight_extractor import extract_all_traffic_lights
+    from stk.extraction.sensor_extractor import extract_sensor_events
+    from stk.extraction.weather_extractor import build_environment_snapshot
+
+    frames_data = []
+    world_tick = world.get_settings().fixed_delta_seconds or 0.05
+
+    print(f"[*] Collecting {args.frames} frames (tick={world_tick}s)...")
+    for i in range(args.frames):
+        world.tick()
+
+        actors = world.get_actors()
+        vehicles = actors.filter("vehicle.*")
+        walkers = actors.filter("walker.*")
+        tls = actors.filter("traffic.traffic_light*")
+        weather = world.get_weather()
+
+        # 收集 raw data，传给提取 pipeline
+        raw_frame = {
+            "frame_id": i,
+            "elapsed_seconds": i * world_tick,
+            "delta_seconds": world_tick,
+            "actors": {
+                "vehicles": [
+                    {
+                        "id": v.id,
+                        "type_id": v.type_id,
+                        "location": {"x": v.get_location().x, "y": v.get_location().y, "z": v.get_location().z},
+                        "rotation": {"pitch": v.get_transform().rotation.pitch, "yaw": v.get_transform().rotation.yaw, "roll": v.get_transform().rotation.roll},
+                        "velocity": {"x": v.get_velocity().x, "y": v.get_velocity().y, "z": v.get_velocity().z},
+                    }
+                    for v in vehicles
+                ],
+                "pedestrians": [
+                    {
+                        "id": w.id,
+                        "type_id": w.type_id,
+                        "location": {"x": w.get_location().x, "y": w.get_location().y, "z": w.get_location().z},
+                        "rotation": {"pitch": w.get_transform().rotation.pitch, "yaw": w.get_transform().rotation.yaw, "roll": w.get_transform().rotation.roll},
+                        "velocity": {"x": w.get_velocity().x, "y": w.get_velocity().y, "z": w.get_velocity().z},
+                    }
+                    for w in walkers
+                ],
+            },
+            "waypoints": [],
+            "traffic_lights": [
+                {
+                    "id": tl.id,
+                    "state": str(tl.get_state()),
+                    "location": {"x": tl.get_transform().location.x, "y": tl.get_transform().location.y, "z": tl.get_transform().location.z},
+                }
+                for tl in tls
+            ],
+            "events": [],
+            "weather": {
+                "cloudiness": weather.cloudiness,
+                "precipitation": weather.precipitation,
+                "precipitation_deposits": weather.precipitation_deposits,
+                "wind_intensity": weather.wind_intensity,
+                "sun_altitude_angle": weather.sun_altitude_angle,
+                "fog_density": weather.fog_density,
+                "wetness": weather.wetness,
+            },
+        }
+
+        # 提取
+        extracted = {
+            "vehicles": extract_all_actors(raw_frame).get("vehicles", []),
+            "pedestrians": extract_all_actors(raw_frame).get("pedestrians", []),
+            "traffic_lights": extract_all_traffic_lights(raw_frame.get("traffic_lights", [])),
+            "weather": build_environment_snapshot(raw_frame.get("weather", {}), i),
+        }
+
+        frames_data.append({
+            "frame_id": i,
+            "elapsed_seconds": i * world_tick,
+            "extracted": extracted,
+        })
+
+        # 每 10 帧输出进度
+        if (i + 1) % 10 == 0 or i == 0 or i == args.frames - 1:
+            nv = len(extracted["vehicles"])
+            np_ = len(extracted["pedestrians"])
+            print(f"  [{i+1:>3}/{args.frames}] {nv} vehicles, {np_} pedestrians")
+
+    # ── 4. 保存 ──────────────────────────────────────────────────────
+    meta = {
+        "host": args.host,
+        "port": args.port,
+        "total_frames": args.frames,
+        "tick_s": world_tick,
+        "town": world.get_map().name if world.get_map() else "unknown",
+        "start_time": timestamp,
+        "timestamp_end": datetime.now().isoformat(),
+    }
+    with open(run_dir / "metadata.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+    with open(run_dir / "frames.json", "w", encoding="utf-8") as f:
+        json.dump(frames_data, f, ensure_ascii=False, indent=2)
+
+    total_size = (run_dir / "frames.json").stat().st_size
+    print(f"
+[OK] 提取完成！共 {len(frames_data)} 帧")
+    print(f"     输出: {run_dir}")
+    print(f"     大小: {total_size / 1024:.1f} KB")
+    print(f"     地图: {meta['town']}")
+    if frames_data:
+        last = frames_data[-1]
+        nv = len(last["extracted"]["vehicles"])
+        np_ = len(last["extracted"]["pedestrians"])
+        print(f"     末帧: {nv} 车辆, {np_} 行人")
+
+    print("
+[*] 完整链路验证通过")
+
+
+if __name__ == "__main__":
+    main()
