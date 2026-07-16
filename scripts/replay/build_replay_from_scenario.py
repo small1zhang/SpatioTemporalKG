@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 # 确保项目根在 sys.path 中
-_REPO = Path(__file__).resolve().parent.parent
+_REPO = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_REPO))
 
 from stk.scenario.scenario_library import all_scenarios, get_scenario

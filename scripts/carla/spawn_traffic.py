@@ -111,7 +111,7 @@ def main():
 
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    _REPO = Path(__file__).resolve().parent.parent
+    _REPO = Path(__file__).resolve().parent.parent.parent
     out_dir = _REPO / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
     run_dir = out_dir / f"traffic_{timestamp}_{args.frames}f"
