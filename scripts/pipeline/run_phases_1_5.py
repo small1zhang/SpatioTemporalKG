@@ -275,6 +275,17 @@ def main():
                 "z": wk.bounding_box.extent.z,
             }
             actor_dict["is_alive"] = wk.is_alive
+            try:
+                wp_walker = map_.get_waypoint(t.location, project_to_road=True, lane_type=carla.LaneType.Any)
+                if wp_walker is not None:
+                    actor_dict["is_on_crosswalk"] = (wp_walker.lane_type == carla.LaneType.Crosswalk)
+                    actor_dict["is_on_sidewalk"] = (wp_walker.lane_type == carla.LaneType.Sidewalk)
+                else:
+                    actor_dict["is_on_crosswalk"] = False
+                    actor_dict["is_on_sidewalk"] = False
+            except Exception:
+                actor_dict["is_on_crosswalk"] = False
+                actor_dict["is_on_sidewalk"] = False
             actors_list.append(actor_dict)
         tl_list = []
         for tl in tls:
