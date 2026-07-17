@@ -215,6 +215,48 @@ def main():
     settings = world.get_settings()
     tick_s = settings.fixed_delta_seconds or 0.05
 
+    # T1.6: 帧循环前为第一辆 spawned vehicle 挂 collision/lane_invasion sensor
+    sensor_events = []
+    sensors_to_destroy = []
+    if spawned_vehicles:
+        try:
+            ego_for_sensor = spawned_vehicles[0]
+            bp_lib = world.get_blueprint_library()
+            col_bp = bp_lib.find("sensor.other.collision")
+            li_bp = bp_lib.find("sensor.other.lane_invasion")
+            col_tf = carla.Transform(carla.Location(x=0.0, y=0.0, z=2.0))
+            # synchronous tick 需要把 sensor attach 到 vehicle 并接收事件
+            col_sensor = world.spawn_actor(col_bp, col_tf, attach_to=ego_for_sensor)
+            li_sensor = world.spawn_actor(li_bp, col_tf, attach_to=ego_for_sensor)
+            def _on_col(event):
+                other_id = event.other_actor.id if event.other_actor is not None else -1
+                sensor_events.append({
+                    "event_type": "Collision",
+                    "ego_id": str(ego_for_sensor.id),
+                    "other_id": str(other_id),
+                    "impulse": float(event.impulse.length()) if hasattr(event.impulse, "length") else 0.0,
+                    "location_x": float(event.transform.location.x),
+                    "location_y": float(event.transform.location.y),
+                })
+            def _on_li(event):
+                crossed = []
+                try:
+                    for mk in event.crossed_lane_markings:
+                        crossed.append(str(mk.type).split(".")[-1])
+                except Exception:
+                    pass
+                sensor_events.append({
+                    "event_type": "LaneInvasion",
+                    "actor_id": str(ego_for_sensor.id),
+                    "crossed_lane_markings": crossed,
+                })
+            col_sensor.listen(_on_col)
+            li_sensor.listen(_on_li)
+            sensors_to_destroy = [col_sensor, li_sensor]
+            print(f"[+] sensor listeners attached to vehicle {ego_for_sensor.id}")
+        except Exception as e:
+            print(f"[!] cannot attach sensor listeners: {e}")
+
     print(f"[*] Sampling {args.frames} frames @ {tick_s}s ...")
     from stk.extraction.actor_extractor import extract_all_actors
     from stk.extraction.trafficlight_extractor import extract_all_traffic_lights
@@ -313,13 +355,27 @@ def main():
             "sun_altitude_angle": weather.sun_altitude_angle,
             "fog_density": weather.fog_density, "wetness": weather.wetness,
         }
+        # T1.6: 把当前 tick 周期产生的 sensor events 分配到当前帧
+        frame_sensor_events = list(sensor_events)
+        sensor_events.clear()
+        for ev in frame_sensor_events:
+            ev["frame_id"] = i
         phase1_frames.append({
             "frame_id": i, "elapsed_seconds": i * tick_s,
             "actors": actors_list, "traffic_lights": tl_list, "weather": weather_dict,
             "waypoints": lane_wps,
+            "events": frame_sensor_events,
         })
         if (i+1) % 20 == 0 or i == 0 or i == args.frames - 1:
             print(f"  frame {i+1:>3}/{args.frames}: v={len(vehicles)} w={len(walkers)} tl={len(tls)}")
+
+    # T1.6: destroy sensor listeners
+    for s in sensors_to_destroy:
+        try:
+            s.stop()
+            s.destroy()
+        except Exception:
+            pass
 
     with open(out_dir / "phase1_extraction.json", "w", encoding="utf-8") as f:
         json.dump(phase1_frames, f, ensure_ascii=False, indent=2)
