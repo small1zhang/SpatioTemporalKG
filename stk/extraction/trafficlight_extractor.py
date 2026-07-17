@@ -14,6 +14,7 @@ def extract_traffic_light(tl_data: dict) -> Dict[str, Any]:
         "location_x": loc.get("x", 0.0),
         "location_y": loc.get("y", 0.0),
         "location_z": loc.get("z", 0.0),
+        "rotation_yaw": tl_data.get("rotation_yaw", 0.0),
         "affected_lane_ids": tl_data.get("affected_lane_ids", []),
     }
 

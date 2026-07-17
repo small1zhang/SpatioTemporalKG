@@ -279,8 +279,14 @@ def main():
         tl_list = []
         for tl in tls:
             t = tl.get_transform()
-            tl_list.append({"id": str(tl.id), "state": str(tl.get_state()),
-                            "location": {"x": t.location.x, "y": t.location.y, "z": t.location.z}})
+            tl_list.append({
+                "id": str(tl.id),
+                "state": str(tl.get_state()),
+                "elapsed_time": tl.get_elapsed_time(),
+                "location": {"x": t.location.x, "y": t.location.y, "z": t.location.z},
+                "rotation_yaw": t.rotation.yaw,
+                "affected_lane_ids": list(tl.get_affected_lane_id_list()) if hasattr(tl, "get_affected_lane_id_list") else [],
+            })
         weather_dict = {
             "cloudiness": weather.cloudiness, "precipitation": weather.precipitation,
             "precipitation_deposits": weather.precipitation_deposits,
