@@ -162,7 +162,7 @@ def main():
             tls_for_lane = world.get_actors().filter("traffic.traffic_light*")
             lane_ids_with_tl = set()
             for tl in tls_for_lane:
-                lane_ids_with_tl.update(tl.get_affected_lane_id_list())
+                lane_ids_with_tl.update(getattr(tl, "get_affected_lane_id_list", lambda: [])())
             for wp in lane_wps:
                 wp["has_traffic_light"] = wp["lane_id"] in lane_ids_with_tl
             print(f"    {len(lane_ids_with_tl)} lane(s) controlled by traffic lights")
@@ -280,7 +280,7 @@ def main():
         for v in vehicles:
             t = v.get_transform(); vel = v.get_velocity()
             acc = v.get_acceleration() if hasattr(v, 'get_acceleration') else None
-            bb = v.get_bounding_box()
+            bb = v.bounding_box
             ctrl = v.get_control()
             lane_info = None
             try:
