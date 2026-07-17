@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+cross_validate.py  --  地图交叉验证: 多 Town 分别跑 → 对比指标
+
+策略: 启动一个 CARLA 实例,顺序切换地图,每张地图走完整 kg 流水线
+比多实例方案更省 GPU 内存,也更稳定。
+
+用法:
+    CUDA_VISIBLE_DEVICES=3 python3 scripts/pipeline/cross_validate.py
+
+输出:
+    data/runs/cross_validation/compare_<timestamp>.json
+    data/runs/cross_validation/town_<town>_<timestamp>_<f>f/
+"""
+from __future__ import annotations
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_REPO))
+
+CARLA_SH = "/home/aisecurity/Carla/CarlaUE4.sh"
+TOWNS = ["Town01", "Town03", "Town05"]
+
+
+def start_carla(port: int) -> int:
+    log = f"/home/aisecurity/carla_cv_{port}.log"
+    p = subprocess.Popen(
+        [CARLA_SH, "-RenderOffScreen", "-nosound",
+         f"-carla-rpc-port={port}", "-quality-level=Low"],
+        stdout=open(log, "w"), stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    print(f"[*] CARLA PID={p.pid}, port={port}, log={log}")
+    return p.pid
+
+
+def wait_carla(host: str, port: int, timeout: int = 90) -> bool:
+    import carla
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            c = carla.Client(host, port)
+            c.set_timeout(10.0)
+            c.get_server_version()
+            return True
+        except Exception:
+            time.sleep(3)
+    return False
+
+
+def stop_carla(port: int):
+    subprocess.run(
+        f"lsof -ti:{port} 2>/dev/null | xargs kill -9 2>/dev/null",
+        shell=True, timeout=10,
+    )
+    time.sleep(3)
+
+
+def run_town(town: str, port: int, frames: int, vehicles: int,
+             walkers: int, out_root: Path) -> dict:
+    """通过子进程运行 run_phases_1_5 在一张地图上完成全流程。"""
+    town_out = out_root / f"town_{town.lower()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{frames}f"
+    print(f"\n{'='*60}")
+    print(f"[+] {town}: port={port}, frames={frames}, veh={vehicles}, ped={walkers}")
+    print(f"    output={town_out}")
+
+    # 确保 CARLA 用这个地图
+    import carla
+    client = carla.Client("localhost", port)
+    client.set_timeout(30.0)
+    old_map = client.get_world().get_map().name
+    if old_map != f"Carla/Maps/{town}":
+        print(f"    Loading map {town} (was {old_map})...")
+        client.load_world(town)
+        time.sleep(5)
+
+    # 子进程执行 run_phases_1_5
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(_REPO / "scripts" / "pipeline" / "run_phases_1_5.py"),
+            "--host", "localhost", "--port", str(port),
+            "--frames", str(frames),
+            "--vehicles", str(vehicles),
+            "--walkers", str(walkers),
+            "--out", "data/runs/cross_validation",
+        ],
+        capture_output=True, text=True, timeout=600,
+        env={**os.environ, "CUDA_VISIBLE_DEVICES": os.environ.get("CUDA_VISIBLE_DEVICES", "3")},
+    )
+
+    stdout = (proc.stdout or "") + (proc.stderr or "")
+    # 定位 KG summary 行
+    summary = {"town": town, "status": "UNKNOWN"}
+    for line in stdout.splitlines():
+        if "KG summary:" in line:
+            try:
+                import re
+                m = re.search(r"KG summary:\s*(\{.*\})", line)
+                if m:
+                    summary = json.loads(m.group(1))
+                    summary["town"] = town
+            except Exception:
+                pass
+        if "All 5 phases passed" in line:
+            summary["status"] = "PASS"
+    if summary.get("status") != "PASS":
+        summary["stdout_tail"] = stdout[-500:]
+
+    # 从 phase5_graph.json 补充 node/edge counts
+    graph_paths = sorted(town_out.rglob("phase5_graph.json")) if town_out.exists() else []
+    if graph_paths:
+        gp = graph_paths[0]
+        with open(gp) as f:
+            g = json.load(f)
+        summary["graph_nodes"] = len(g["nodes"])
+        summary["graph_edges"] = len(g["edges"])
+        t_nodes = Counter(n["type"] for n in g["nodes"])
+        t_edges = Counter(e["type"] for e in g["edges"])
+        summary["node_types"] = dict(t_nodes)
+        summary["edge_types"] = dict(t_edges)
+    else:
+        print(f"    [!] phase5_graph.json not found in {town_out}")
+
+    return summary
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--frames", type=int, default=30)
+    p.add_argument("--vehicles", type=int, default=15)
+    p.add_argument("--walkers", type=int, default=5)
+    p.add_argument("--port", type=int, default=2200)
+    p.add_argument("--out", default="data/runs/cross_validation")
+    args = p.parse_args()
+
+    out_root = _REPO / args.out
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    # 启动 CARLA
+    print(f"[*] Starting CARLA on port {args.port}...")
+    stop_carla(args.port)
+    pid = start_carla(args.port)
+    if not wait_carla("localhost", args.port, timeout=120):
+        print("[FATAL] CARLA not ready")
+        sys.exit(1)
+
+    try:
+        results = []
+        for town in TOWNS:
+            r = run_town(town, args.port, args.frames,
+                         args.vehicles, args.walkers, out_root)
+            results.append(r)
+
+        # 对比表
+        print(f"\n{'='*70}")
+        print("COMPARISON TABLE")
+        print(f"{'='*70}")
+        hdrs = ["Town", "Nodes", "Edges", "SV", "RA", "Maneuver", "Interact", "Status"]
+        print(f"{hdrs[0]:<10} {hdrs[1]:<8} {hdrs[2]:<8} {hdrs[3]:<6} {hdrs[4]:<6} {hdrs[5]:<10} {hdrs[6]:<10} {hdrs[7]:<10}")
+        print("-" * 70)
+        table = {}
+        for r in results:
+            t = r.get("town", "?")
+            nt = r.get("node_types", {})
+            row = {
+                "nodes": r.get("graph_nodes", "?"),
+                "edges": r.get("graph_edges", "?"),
+                "SafetyViolation": nt.get("SafetyViolation", "?"),
+                "ResponsibilityAssignment": nt.get("ResponsibilityAssignment", "?"),
+                "Maneuver": nt.get("Maneuver", "?"),
+                "InteractionEvent": nt.get("InteractionEvent", "?"),
+                "status": r.get("status", "?"),
+            }
+            table[t] = row
+            print(f"{t:<10} {row['nodes']:<8} {row['edges']:<8} "
+                  f"{row['SafetyViolation']:<6} {row['ResponsibilityAssignment']:<6} "
+                  f"{row['Maneuver']:<10} {row['InteractionEvent']:<10} {row['status']:<10}")
+
+        compare = {
+            "timestamp": datetime.now().isoformat(),
+            "frames": args.frames, "vehicles": args.vehicles, "walkers": args.walkers,
+            "port": args.port,
+            "results": results,
+            "table": table,
+        }
+        cmp_path = out_root / f"compare_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(cmp_path, "w", encoding="utf-8") as f:
+            json.dump(compare, f, ensure_ascii=False, indent=2)
+        print(f"\n[OK] Compare saved: {cmp_path}")
+
+    finally:
+        stop_carla(args.port)
+        print(f"[*] CARLA port {args.port} released")
+
+
+if __name__ == "__main__":
+    main()
