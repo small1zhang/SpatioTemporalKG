@@ -35,3 +35,4 @@ env/
 Thumbs.db
 # backups
 *.bak.*
+stk/viz/kg_dashboard_ref.py
