@@ -5,6 +5,7 @@ import json
 from typing import Any, Dict, List
 from stk.ontology.entity import BaseEntity
 from stk.ontology.relation import BaseRelation
+from stk.dynamic.event_injector import inject_violation
 
 
 def entity_to_cypher_params(entity: BaseEntity) -> Dict[str, Any]:
@@ -306,6 +307,40 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
 
     if merge_violations and sv_buffer:
         _merge_violations_into_nodes(nodes, edges, sv_buffer, ra_buffer)
+
+    # --- RuleDefinition + definedBy/usedsParam edges (T4.1) ---
+    rule_defs_seen = set()
+    for fid, vio_list in sv_buffer.items():
+        for sv in vio_list:
+            rule_code = sv.get("rule_code", "") if isinstance(sv, dict) else getattr(sv, "rule_code", "")
+            if rule_code and rule_code not in rule_defs_seen:
+                rule_defs_seen.add(rule_code)
+                nd_id = f"rule_{rule_code}"
+                if nd_id not in nodes:
+                    nodes[nd_id] = {
+                        "id": nd_id, "type": "Rule",
+                        "first_frame": fid, "last_frame": fid,
+                        "attrs": {"rule_code": rule_code,
+                                  "rule_name": sv.get("rule_name", "") if isinstance(sv, dict) else getattr(sv, "rule_name", ""),
+                                  "rule_layer": sv.get("rule_layer", "") if isinstance(sv, dict) else getattr(sv, "rule_layer", ""),
+                                  "predicate_name": rule_code},
+                    }
+            # definedBy edge
+            sv_id = sv.get("sv_id", "") if isinstance(sv, dict) else getattr(sv, "entity_id", "")
+            if sv_id and rule_code:
+                _add_edge(edges, {
+                    "src_id": sv_id, "dst_id": f"rule_{rule_code}",
+                    "relation_type": "definedBy", "frame_id": fid,
+                }, fid)
+            # supportedByEvidence edges (from evidence_path)
+            ev_path = sv.get("evidence_path", []) if isinstance(sv, dict) else getattr(sv, "evidence_path", [])
+            for idx, ev_id in enumerate(ev_path):
+                _add_edge(edges, {
+                    "src_id": sv_id, "dst_id": str(ev_id),
+                    "relation_type": "supportedByEvidence",
+                    "frame_id": fid, "attrs": {"evidence_idx": idx},
+                }, fid)
+
 
     return {"nodes": list(nodes.values()), "edges": list(edges.values())}
 
