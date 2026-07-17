@@ -9,7 +9,7 @@
     (由 cross_validate.py 保证每个 town 是 fresh cold-boot 后的 server)
 """
 from __future__ import annotations
-import argparse, json, os, subprocess, sys, time
+import argparse, json, os, math, subprocess, sys, time
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -229,6 +229,9 @@ def main():
         actors_list = []
         for v in vehicles:
             t = v.get_transform(); vel = v.get_velocity()
+            acc = v.get_acceleration() if hasattr(v, 'get_acceleration') else None
+            bb = v.get_bounding_box()
+            ctrl = v.get_control()
             lane_info = None
             try:
                 wp = map_.get_waypoint(t.location, project_to_road=True, lane_type=carla.LaneType.Driving)
@@ -236,6 +239,7 @@ def main():
                     lane_info = (int(wp.road_id), int(wp.lane_id))
             except Exception: pass
             actor_dict = {
+                "is_ego": False,
                 "type": "vehicle", "id": str(v.id), "type_id": v.type_id,
                 "location": {"x": t.location.x, "y": t.location.y, "z": t.location.z},
                 "rotation": {"pitch": t.rotation.pitch, "yaw": t.rotation.yaw, "roll": t.rotation.roll},
@@ -243,15 +247,35 @@ def main():
             }
             if lane_info is not None:
                 actor_dict["road_id"] = lane_info[0]; actor_dict["lane_id"] = lane_info[1]
+            actor_dict["acceleration"] = ({"x": acc.x, "y": acc.y, "z": acc.z} if acc is not None else {})
+            actor_dict["speed"] = vel.length()
+            actor_dict["heading_rad"] = math.radians(t.rotation.yaw)
+            actor_dict["pitch"] = t.rotation.pitch
+            actor_dict["roll"] = t.rotation.roll
+            actor_dict["bbox_extent"] = {"x": bb.extent.x, "y": bb.extent.y, "z": bb.extent.z}
+            actor_dict["is_alive"] = v.is_alive
+            actor_dict["is_emergency"] = bool(v.is_emergency_vehicle) if hasattr(v, "is_emergency_vehicle") else False
+            actor_dict["control"] = {"throttle": ctrl.throttle, "brake": ctrl.brake, "steer": ctrl.steer}
             actors_list.append(actor_dict)
         for wk in walkers:
             t = wk.get_transform(); vel = wk.get_velocity()
-            actors_list.append({
+            actor_dict = {
                 "type": "walker", "id": str(wk.id), "type_id": wk.type_id,
                 "location": {"x": t.location.x, "y": t.location.y, "z": t.location.z},
                 "rotation": {"pitch": t.rotation.pitch, "yaw": t.rotation.yaw, "roll": t.rotation.roll},
                 "velocity": {"x": vel.x, "y": vel.y, "z": vel.z},
-            })
+            }
+            actor_dict["speed"] = vel.length()
+            actor_dict["heading_rad"] = math.radians(t.rotation.yaw)
+            actor_dict["pitch"] = t.rotation.pitch
+            actor_dict["roll"] = t.rotation.roll
+            actor_dict["bbox_extent"] = {
+                "x": wk.bounding_box.extent.x,
+                "y": wk.bounding_box.extent.y,
+                "z": wk.bounding_box.extent.z,
+            }
+            actor_dict["is_alive"] = wk.is_alive
+            actors_list.append(actor_dict)
         tl_list = []
         for tl in tls:
             t = tl.get_transform()
