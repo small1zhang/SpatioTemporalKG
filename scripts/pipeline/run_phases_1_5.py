@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""run_phases_1_5.py -- 一键跑通时空动态知识图谱 5 个阶段 (GPU 3)
+"""run_phases_1_5.py -- 一键跑通时空动态知识图谱 5 个阶段
 
-更新版:
-  - 采 lane topology (waypoints) 真实入图
-  - 车辆 -> in_lane 关系
-  - phase5 用真正的 serialize_graph 导出 KG
+修复说明 (进程级隔离):
+  删除了旧版在已有 actor 时调 client.load_world() 的路径 (UE4 SIGSEGV),
+  改为:
+  - 如果 --town 指定: 确认当前 server 上 actors == 0 才调 load_world
+    (由 cross_validate.py 保证每个 town 是 fresh cold-boot 后的 server)
 """
 from __future__ import annotations
-import argparse, json, os, sys, time
+import argparse, json, os, subprocess, sys, time
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -24,12 +25,10 @@ def banner(label):
 
 
 def collect_waypoints(world, max_count: int = 2000):
-    """遍历 map waypoint, 提取 road/lane 拓扑信息."""
     carla = sys.modules["carla"]
     map_ = world.get_map()
-    # generate_waypoints 在 0.9.16 上要传 distance
     try:
-        wps = map_.generate_waypoints(2.0)  # 每 2m 一个
+        wps = map_.generate_waypoints(2.0)
     except Exception:
         wps = map_.get_topology_waypoints()
     if not wps:
@@ -46,7 +45,6 @@ def collect_waypoints(world, max_count: int = 2000):
             seen.add(key)
             tr = wp.transform
             loc = tr.location
-            # left / right lane (SiblingLane)
             left_id = None; right_id = None
             try:
                 left = wp.get_left_lane()
@@ -67,37 +65,26 @@ def collect_waypoints(world, max_count: int = 2000):
                 "heading_rad": float(tr.rotation.yaw * 3.141592653589793 / 180.0),
                 "left_lane_id": left_id,
                 "right_lane_id": right_id,
-                "speed_limit": 0.0,  # CARLA 0.9.16 没 speed_limit API, 默认值
+                "speed_limit": 0.0,
             })
         except Exception:
             continue
     return out
 
 
-def get_lane_of(map_, location, fallback_lane_id=None):
-    """给 actor location 返回 (road_id, lane_id) 或 None."""
-    try:
-        wp = map_.get_waypoint(location, project_to_road=True,
-                               lane_type=carla.LaneType.Driving)
-        if wp is None:
-            return None
-        return (int(wp.road_id), int(wp.lane_id))
-    except Exception:
-        return None
-
-
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--host", default="localhost")
     p.add_argument("--port", type=int, default=2000)
+    p.add_argument("--carla-port", type=int, default=None,
+                   help="CARLA server port (默认=--port)")
     p.add_argument("--frames", type=int, default=60)
     p.add_argument("--vehicles", type=int, default=30)
     p.add_argument("--walkers", type=int, default=15)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", default="data/runs")
     p.add_argument("--no-spawn", action="store_true")
-    p.add_argument("--collect-lanes", action="store_true",
-                   help="强制采 lane 拓扑 (默认 True)")
+    p.add_argument("--town", default=None)
     p.add_argument("--no-lanes", action="store_true")
     args = p.parse_args()
 
@@ -111,27 +98,60 @@ def main():
 
     timings = {}
 
-    # ===== Phase 1: CARLA extraction =====
     banner("Phase 1: CARLA extraction")
     t0 = time.time()
 
     try:
-        import carla  # noqa
+        import carla
     except ImportError:
         print("[FATAL] cant import carla"); sys.exit(1)
 
     import random
     random.seed(args.seed)
 
-    print(f"[*] Connecting CARLA {args.host}:{args.port} ...")
-    client = carla.Client(args.host, args.port)
+    actual_carla_port = args.carla_port if args.carla_port else args.port
+
+    print(f"[*] Connecting CARLA at {args.host}:{actual_carla_port} ...")
+    client = carla.Client(args.host, actual_carla_port)
     client.set_timeout(30.0)
-    print(f"[+] server={client.get_server_version()} client={client.get_client_version()}")
     world = client.get_world()
+    try:
+        print(f"[+] server={client.get_server_version()} client={client.get_client_version()}")
+    except Exception as e:
+        print(f"[FATAL] cant connect: {e}"); sys.exit(2)
+
+    if args.town:
+        current_map = world.get_map().name
+        target_map = f"Carla/Maps/{args.town}"
+        if current_map == target_map:
+            print(f"[+] Already on {target_map}, no switch needed")
+        else:
+            n_actors = len(world.get_actors())
+            print(f"[*] Switching from {current_map} to {target_map}, existing_actors={n_actors} ...")
+            if n_actors > 0:
+                print(f"[!] {n_actors} actors exist, destroying first ...")
+                for a in world.get_actors():
+                    try: a.destroy()
+                    except Exception: pass
+                time.sleep(2)
+            client.load_world(args.town)
+            print(f"    load_world returned, waiting for new world...")
+            time.sleep(5)
+            world = client.get_world()
+            for _ in range(10):
+                actors = world.get_actors()
+                if (len(list(actors.filter("vehicle.*"))) == 0
+                    and len(list(actors.filter("walker.*"))) == 0):
+                    break
+                time.sleep(1)
+            world = client.get_world()
+            print(f"[+] Loaded map: {world.get_map().name}")
+    else:
+        world = client.get_world()
+
     bp_lib = world.get_blueprint_library()
     map_ = world.get_map()
 
-    # --- 1.1 采集 lane 拓扑 (全局,一次即可) ---
     lane_wps = []
     if not args.no_lanes:
         print("[*] Collecting lane waypoints ...")
@@ -142,7 +162,6 @@ def main():
             print(f"[!] cant collect waypoints: {e}")
             lane_wps = []
 
-    # --- 1.2 spawn 交通 ---
     spawned_vehicles = []
     spawned_walkers = []
     if not args.no_spawn:
@@ -153,8 +172,7 @@ def main():
         for _ in range(args.vehicles):
             for _try in range(10):
                 idx = random.randint(0, len(spawn_points) - 1)
-                if idx in used:
-                    continue
+                if idx in used: continue
                 bp = random.choice(vehicle_bps)
                 bp.set_attribute("role_name", "autopilot")
                 try:
@@ -163,8 +181,7 @@ def main():
                     spawned_vehicles.append(v)
                     used.add(idx)
                     break
-                except RuntimeError:
-                    continue
+                except RuntimeError: continue
         print(f"[+] spawned {len(spawned_vehicles)} vehicles")
 
         print(f"[*] Spawning {args.walkers} walkers ...")
@@ -172,12 +189,10 @@ def main():
         controller_bp = bp_lib.find("controller.ai.walker")
         batches = []
         for _ in range(args.walkers):
-            if not walker_bps:
-                break
+            if not walker_bps: break
             bp = random.choice(walker_bps)
             nav_loc = world.get_random_location_from_navigation()
-            if nav_loc is None:
-                continue
+            if nav_loc is None: continue
             tf = carla.Transform(nav_loc)
             wc = carla.command.SpawnActor(bp, tf)
             wc.then(carla.command.SpawnActor(controller_bp, tf))
@@ -214,15 +229,12 @@ def main():
         actors_list = []
         for v in vehicles:
             t = v.get_transform(); vel = v.get_velocity()
-            # 找出当前车辆的 (road_id, lane_id)
             lane_info = None
             try:
-                wp = map_.get_waypoint(t.location, project_to_road=True,
-                                       lane_type=carla.LaneType.Driving)
+                wp = map_.get_waypoint(t.location, project_to_road=True, lane_type=carla.LaneType.Driving)
                 if wp is not None:
                     lane_info = (int(wp.road_id), int(wp.lane_id))
-            except Exception:
-                pass
+            except Exception: pass
             actor_dict = {
                 "type": "vehicle", "id": str(v.id), "type_id": v.type_id,
                 "location": {"x": t.location.x, "y": t.location.y, "z": t.location.z},
@@ -230,8 +242,7 @@ def main():
                 "velocity": {"x": vel.x, "y": vel.y, "z": vel.z},
             }
             if lane_info is not None:
-                actor_dict["road_id"] = lane_info[0]
-                actor_dict["lane_id"] = lane_info[1]
+                actor_dict["road_id"] = lane_info[0]; actor_dict["lane_id"] = lane_info[1]
             actors_list.append(actor_dict)
         for wk in walkers:
             t = wk.get_transform(); vel = wk.get_velocity()
@@ -244,10 +255,8 @@ def main():
         tl_list = []
         for tl in tls:
             t = tl.get_transform()
-            tl_list.append({
-                "id": str(tl.id), "state": str(tl.get_state()),
-                "location": {"x": t.location.x, "y": t.location.y, "z": t.location.z},
-            })
+            tl_list.append({"id": str(tl.id), "state": str(tl.get_state()),
+                            "location": {"x": t.location.x, "y": t.location.y, "z": t.location.z}})
         weather_dict = {
             "cloudiness": weather.cloudiness, "precipitation": weather.precipitation,
             "precipitation_deposits": weather.precipitation_deposits,
@@ -258,7 +267,7 @@ def main():
         phase1_frames.append({
             "frame_id": i, "elapsed_seconds": i * tick_s,
             "actors": actors_list, "traffic_lights": tl_list, "weather": weather_dict,
-            "waypoints": lane_wps,  # 复用同一份静态车道
+            "waypoints": lane_wps,
         })
         if (i+1) % 20 == 0 or i == 0 or i == args.frames - 1:
             print(f"  frame {i+1:>3}/{args.frames}: v={len(vehicles)} w={len(walkers)} tl={len(tls)}")
@@ -268,21 +277,18 @@ def main():
     timings["phase1_extraction"] = time.time() - t0
     print(f"[OK] Phase 1 done ({timings['phase1_extraction']:.1f}s)")
 
-    # ===== Phase 2: Scene layer =====
     banner("Phase 2: Scene layer")
     t0 = time.time()
-
     from stk.scenario.snapshot_builder import FrameData, build_snapshot
     from stk.scenario.spatial import (
-    compute_in_lane, compute_ahead_of,
-    compute_beside, compute_nearby_pedestrian,
-)
+        compute_in_lane, compute_ahead_of,
+        compute_beside, compute_nearby_pedestrian,
+    )
 
     phase2_frames = []
     for raw in phase1_frames:
         actors = extract_all_actors(raw)
-        # 在每个 actor 上加 lane_id (前面已经从 waypoint 拿到了)
-        for idx, av in enumerate(actors.get("vehicles", [])):
+        for av in actors.get("vehicles", []):
             src = next((a for a in raw["actors"] if str(a["id"]) == str(av.get("entity_id"))), None)
             if src and "lane_id" in src:
                 av["lane_id"] = src["lane_id"]
@@ -293,44 +299,31 @@ def main():
         weather = build_environment_snapshot(raw.get("weather", {}), raw["frame_id"])
         lanes = extract_waypoints(raw.get("waypoints", []))
         topo = build_lane_topology(raw.get("waypoints", []))
-
-        # 用 spatial.py 计算 4 类场景关系 (dict -> SimpleNamespace)
-
-        # 空间关系: 用 types.SimpleNamespace + dict 适配 spatial.py
         spatial_rels = []
         try:
             from types import SimpleNamespace
             vehs_raw = actors.get("vehicles", [])
             peds_raw = actors.get("pedestrians", [])
-            # 把每条 dict 转为 SimpleNamespace,同时保留 attrs 作为 dict
             vehs_adapted = []
             for v in vehs_raw:
-                sn = SimpleNamespace(**v)
-                sn.attrs = dict(v)
+                sn = SimpleNamespace(**v); sn.attrs = dict(v)
                 if not hasattr(sn, "entity_id") or sn.entity_id is None:
                     sn.entity_id = str(v.get("entity_id", v.get("id", "")))
                 vehs_adapted.append(sn)
             peds_adapted = []
             for p in peds_raw:
-                sn = SimpleNamespace(**p)
-                sn.attrs = dict(p)
+                sn = SimpleNamespace(**p); sn.attrs = dict(p)
                 if not hasattr(sn, "entity_id") or sn.entity_id is None:
                     sn.entity_id = str(p.get("entity_id", p.get("id", "")))
                 peds_adapted.append(sn)
-
             spatial_rels.extend(compute_in_lane(vehs_adapted, lanes, raw["frame_id"]))
             spatial_rels.extend(compute_ahead_of(vehs_adapted, raw["frame_id"]))
             spatial_rels.extend(compute_beside(vehs_adapted, raw["frame_id"]))
             spatial_rels.extend(compute_nearby_pedestrian(vehs_adapted, peds_adapted, raw["frame_id"]))
         except Exception as e:
-            import traceback
-            fid = raw.get("frame_id", -1)
-            print(f"[!] spatial err frame {fid}: {e}")
+            print(f"[!] spatial err frame {raw['frame_id']}: {e}")
             import traceback; traceback.print_exc()
-            traceback.print_exc()
 
-        # 把 BaseRelation 转成 dict, 供 serialize_graph 使用
-        # BaseRelation 是 pydantic BaseModel, 字段直接访问
         spatial_rels_dicts = []
         for r in spatial_rels:
             spatial_rels_dicts.append({
@@ -342,15 +335,10 @@ def main():
         all_scene_rels = topo + spatial_rels_dicts
 
         fd = FrameData(
-            frame_id=raw["frame_id"],
-            elapsed_seconds=raw["elapsed_seconds"],
-            delta_seconds=tick_s,
-            vehicles=actors.get("vehicles", []),
-            pedestrians=actors.get("pedestrians", []),
-            traffic_lights=tl,
-            lanes=lanes,
-            weather=raw.get("weather", {}),
-            map_name=map_.name,
+            frame_id=raw["frame_id"], elapsed_seconds=raw["elapsed_seconds"],
+            delta_seconds=tick_s, vehicles=actors.get("vehicles", []),
+            pedestrians=actors.get("pedestrians", []), traffic_lights=tl,
+            lanes=lanes, weather=raw.get("weather", {}), map_name=map_.name,
         )
         try:
             scen_snap, env_snap = build_snapshot(fd)
@@ -360,17 +348,11 @@ def main():
             scen_dict = str(e); env_dict = str(e)
 
         snap_dict = {
-            "frame_id": raw["frame_id"],
-            "elapsed_seconds": raw["elapsed_seconds"],
-            "delta_seconds": tick_s,
-            "vehicles": actors.get("vehicles", []),
-            "pedestrians": actors.get("pedestrians", []),
-            "traffic_lights": tl,
-            "lanes": lanes,
-            "scene_rels": all_scene_rels,
-            "weather": weather,
-            "scenario_snapshot": scen_dict,
-            "environment_snapshot": env_dict,
+            "frame_id": raw["frame_id"], "elapsed_seconds": raw["elapsed_seconds"],
+            "delta_seconds": tick_s, "vehicles": actors.get("vehicles", []),
+            "pedestrians": actors.get("pedestrians", []), "traffic_lights": tl,
+            "lanes": lanes, "scene_rels": all_scene_rels, "weather": weather,
+            "scenario_snapshot": scen_dict, "environment_snapshot": env_dict,
         }
         phase2_frames.append(snap_dict)
 
@@ -382,19 +364,15 @@ def main():
     n_lane = len(phase2_frames[0]["lanes"]) if phase2_frames else 0
     n_srel = sum(len(s["scene_rels"]) for s in phase2_frames)
     timings["phase2_scene"] = time.time() - t0
-    print(f"[OK] Phase 2 done ({timings['phase2_scene']:.2f}s) "
-          f"veh={n_veh} ped={n_ped} lanes/frame={n_lane} scene_rels total={n_srel}")
+    print(f"[OK] Phase 2 done ({timings['phase2_scene']:.2f}s) veh={n_veh} ped={n_ped} lanes/frame={n_lane} scene_rels total={n_srel}")
 
-    # ===== Phase 3: Behavior + Rules =====
     banner("Phase 3: Behavior + Rules")
     t0 = time.time()
     from stk.behavior.generator import BehaviorRelationGenerator
     from stk.rules.generator import RuleEnforcer
 
-    beh_gen = BehaviorRelationGenerator()
-    rule_enf = RuleEnforcer()
-    phase3_beh = []
-    phase3_rul = []
+    beh_gen = BehaviorRelationGenerator(); rule_enf = RuleEnforcer()
+    phase3_beh = []; phase3_rul = []
     phase3_maneuvers_raw = []
     phase3_interactions_raw = []
     phase3_ruleouts_raw = []
@@ -404,11 +382,8 @@ def main():
         tl_str  = [{**t, "entity_id": str(t.get("entity_id", t.get("id", "")))} for t in snap.get("traffic_lights", [])]
 
         beh_out = beh_gen.generate(
-            frame_id=snap["frame_id"],
-            vehicles=veh_str,
-            pedestrians=ped_str,
-            traffic_lights=tl_str,
-            scene_relations=snap.get("scene_rels", []),
+            frame_id=snap["frame_id"], vehicles=veh_str, pedestrians=ped_str,
+            traffic_lights=tl_str, scene_relations=snap.get("scene_rels", []),
         )
         phase3_maneuvers_raw.extend(beh_out.get("maneuvers", []))
         phase3_interactions_raw.extend(beh_out.get("interactions", []))
@@ -421,15 +396,14 @@ def main():
         })
 
         rule_out = rule_enf.enforce(
-            frame_id=snap["frame_id"],
-            vehicles=veh_str,
-            pedestrians=ped_str,
-            traffic_lights=tl_str,
-            scene_rels=snap.get("scene_rels", []),
+            frame_id=snap["frame_id"], vehicles=veh_str, pedestrians=ped_str,
+            traffic_lights=tl_str, scene_rels=snap.get("scene_rels", []),
         )
-        phase3_ruleouts_raw.append({"frame_id": snap["frame_id"],
-                                        "violations": rule_out.get("violations", []),
-                                        "responsibilities": rule_out.get("responsibilities", [])})
+        phase3_ruleouts_raw.append({
+            "frame_id": snap["frame_id"],
+            "violations": rule_out.get("violations", []),
+            "responsibilities": rule_out.get("responsibilities", []),
+        })
         phase3_rul.append({
             "frame_id": snap["frame_id"],
             "n_violations": len(rule_out["violations"]),
@@ -445,10 +419,8 @@ def main():
     total_int = sum(p["n_interactions"] for p in phase3_beh)
     total_vio = sum(p["n_violations"] for p in phase3_rul)
     timings["phase3_behavior_rules"] = time.time() - t0
-    print(f"[OK] Phase 3 done ({timings['phase3_behavior_rules']:.2f}s) "
-          f"maneuvers={total_man} interactions={total_int} violations={total_vio}")
+    print(f"[OK] Phase 3 done ({timings['phase3_behavior_rules']:.2f}s) maneuvers={total_man} interactions={total_int} violations={total_vio}")
 
-    # ===== Phase 4: Incremental update =====
     banner("Phase 4: Incremental update")
     t0 = time.time()
     from stk.dynamic.incremental_updater import IncrementalEngine
@@ -475,7 +447,6 @@ def main():
     timings["phase4_delta"] = time.time() - t0
     print(f"[OK] Phase 4 done ({timings['phase4_delta']:.2f}s) - {engine.n_deltas} delta graphs")
 
-    # ===== Phase 5: Storage & graph output =====
     banner("Phase 5: Storage & graph summary")
     t0 = time.time()
     from stk.storage.serializer import serialize_graph
@@ -496,28 +467,18 @@ def main():
 
     all_ids = set()
     for s in phase2_frames:
-        for v in s["vehicles"]:
-            all_ids.add(str(v.get("entity_id", v.get("id", ""))))
-        for p in s["pedestrians"]:
-            all_ids.add(str(p.get("entity_id", p.get("id", ""))))
-        for tl in s["traffic_lights"]:
-            all_ids.add(str(tl.get("entity_id", tl.get("id", ""))))
-        for ln in s["lanes"]:
-            all_ids.add(str(ln.get("entity_id", "")))
+        for v in s["vehicles"]: all_ids.add(str(v.get("entity_id", v.get("id", ""))))
+        for p in s["pedestrians"]: all_ids.add(str(p.get("entity_id", p.get("id", ""))))
+        for tl in s["traffic_lights"]: all_ids.add(str(tl.get("entity_id", tl.get("id", ""))))
+        for ln in s["lanes"]: all_ids.add(str(ln.get("entity_id", "")))
 
     summary = {
-        "total_unique_entities": len(all_ids),
-        "total_frames": args.frames,
-        "town": world.get_map().name,
-        "lanes_per_frame": n_lane,
-        "scene_rels_total": n_srel,
-        "phase3_maneuvers": total_man,
-        "phase3_interactions": total_int,
-        "phase3_violations": total_vio,
-        "phase4_deltas": engine.n_deltas,
-        "phase5_graph_nodes": g_nodes,
-        "phase5_graph_edges": g_edges,
-        "phase5_node_types": dict(type_counts),
+        "total_unique_entities": len(all_ids), "total_frames": args.frames,
+        "town": world.get_map().name, "lanes_per_frame": n_lane,
+        "scene_rels_total": n_srel, "phase3_maneuvers": total_man,
+        "phase3_interactions": total_int, "phase3_violations": total_vio,
+        "phase4_deltas": engine.n_deltas, "phase5_graph_nodes": g_nodes,
+        "phase5_graph_edges": g_edges, "phase5_node_types": dict(type_counts),
         "phase5_edge_types": dict(edge_type_counts),
     }
     with open(out_dir / "phase5_kg_summary.json", "w", encoding="utf-8") as f:
@@ -525,29 +486,22 @@ def main():
     print(f"[+] KG summary: {summary}")
     timings["phase5_storage"] = time.time() - t0
 
-    # ===== Cleanup =====
     print("\n[*] Cleaning up spawned actors ...")
-    for v in spawned_vehicles:
-        try: v.destroy()
-        except Exception: pass
-    actor_map = {a.id: a for a in world.get_actors()}
-    for wid, cid in spawned_walkers:
-        if cid in actor_map:
-            try: actor_map[cid].destroy()
+    try:
+        for a in world.get_actors():
+            try:
+                if a.type_id.startswith("vehicle.") or a.type_id.startswith("walker."):
+                    a.destroy()
             except Exception: pass
-        if wid in actor_map:
-            try: actor_map[wid].destroy()
-            except Exception: pass
-    print("[+] cleanup done")
+        print("[+] cleanup done")
+    except Exception as e:
+        print(f"[!] cleanup warning: {e}")
 
     meta = {
-        "host": args.host, "port": args.port,
-        "frames": args.frames,
-        "vehicles_spawned": len(spawned_vehicles),
-        "walkers_spawned": len(spawned_walkers),
-        "town": world.get_map().name, "tick_s": tick_s,
-        "seed": args.seed, "cuda_visible_devices": gpu_env,
-        "lane_waypoints_collected": len(lane_wps),
+        "host": args.host, "port": args.port, "frames": args.frames,
+        "vehicles_spawned": len(spawned_vehicles), "walkers_spawned": len(spawned_walkers),
+        "town": world.get_map().name, "tick_s": tick_s, "seed": args.seed,
+        "cuda_visible_devices": gpu_env, "lane_waypoints_collected": len(lane_wps),
         "timings": timings, "total_time_s": sum(timings.values()),
     }
     with open(out_dir / "metadata.json", "w", encoding="utf-8") as f:
@@ -556,8 +510,7 @@ def main():
     banner("Summary")
     print(f"Output: {out_dir}")
     print(f"Total:  {sum(timings.values()):.2f}s")
-    for k, v in timings.items():
-        print(f"  {k}: {v:.2f}s")
+    for k, v in timings.items(): print(f"  {k}: {v:.2f}s")
     print()
     print("[OK] All 5 phases passed!")
     print(f"     KG: {g_nodes} nodes, {g_edges} edges")
