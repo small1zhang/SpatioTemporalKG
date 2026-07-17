@@ -169,14 +169,42 @@ def compute_adjacent_lanes(lanes: List[Dict], frame_id: int) -> List[BaseRelatio
     return results
 
 
-def compute_in_junction(vehicles: List, frame_id: int) -> List[BaseRelation]:
+def compute_in_junction(vehicles: List, frame_id: int, lanes: Optional[List[Dict]] = None) -> List[BaseRelation]:
     """InJunction: 车辆在路口内 (v3 §2.9.1)。
 
-    用简单的逻辑：如果车辆位置与某个 junction 的 bbox 相交。
-    这里简化为检测位置是否靠近 junction 区域（由路网构建器标记）。
+    通过 vehicle 当前所在 lane 的 junction_id 判定: 若 vehicle.attrs["current_lane_id"]
+    对应的 lane attrs["junction_id"] != -1, 则创建
+    in_junction(vehicle_id, junction_id, frame_id, frame_id) 关系.
+
+    Args:
+        vehicles: VehicleEntity 列表, attrs 中需含 current_lane_id
+        frame_id: 当前帧号
+        lanes: 可选, lane 属性字典列表 (含 entity_id 与 junction_id)
+
+    Returns:
+        BaseRelation 列表
     """
     results: List[BaseRelation] = []
-    # 离线模式下靠路网构建器返回的 junction 标记
-    # 实际计算需要在路网topology中查出哪些 vehicle 的 waypoint 的 junction_id != -1
+    # 构建 lane_id -> junction_id 索引
+    lane_to_junction: Dict[str, int] = {}
+    if lanes is not None:
+        for ln in lanes:
+            if hasattr(ln, "entity_id"):
+                eid = ln.entity_id
+                jid = (ln.attrs or {}).get("junction_id", -1) if hasattr(ln, "attrs") else getattr(ln, "junction_id", -1)
+            else:
+                eid = ln.get("entity_id", "")
+                jid = ln.get("junction_id", -1)
+            if eid and jid != -1:
+                lane_to_junction[eid] = int(jid)
+
+    for v in vehicles:
+        attrs = v.attrs if hasattr(v, "attrs") else (v.get("attrs", v) if isinstance(v, dict) else v)
+        cur_lane_id = attrs.get("current_lane_id")
+        if not cur_lane_id:
+            continue
+        jid = lane_to_junction.get(str(cur_lane_id), -1)
+        if jid != -1:
+            results.append(in_junction(v.entity_id, f"junction_{jid}", frame_id, frame_id))
     return results
 

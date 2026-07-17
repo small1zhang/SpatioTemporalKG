@@ -388,6 +388,7 @@ def main():
     from stk.scenario.spatial import (
         compute_in_lane, compute_ahead_of,
         compute_beside, compute_nearby_pedestrian,
+        compute_in_junction,
     )
 
     phase2_frames = []
@@ -432,6 +433,7 @@ def main():
             spatial_rels.extend(compute_ahead_of(vehs_adapted, raw["frame_id"]))
             spatial_rels.extend(compute_beside(vehs_adapted, raw["frame_id"]))
             spatial_rels.extend(compute_nearby_pedestrian(vehs_adapted, peds_adapted, raw["frame_id"]))
+            spatial_rels.extend(compute_in_junction(vehs_adapted, raw["frame_id"], lanes))
         except Exception as e:
             print(f"[!] spatial err frame {raw['frame_id']}: {e}")
             import traceback; traceback.print_exc()
