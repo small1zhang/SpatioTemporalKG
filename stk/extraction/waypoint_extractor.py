@@ -30,18 +30,40 @@ def extract_waypoints(waypoint_data: List[dict]) -> List[Dict[str, Any]]:
 
 
 def build_lane_topology(waypoint_data: List[dict]) -> List[Dict[str, Any]]:
-    """构建车道拓扑关系 (adjacent / connects)."""
+    """构建车道拓扑关系 (adjacent / connects / controlled_by)."""
     rels = []
+    road_groups = {}
     for wp in waypoint_data:
-        nid = f"road_{wp['road_id']}_lane_{wp['lane_id']}"
+        rid = wp.get("road_id", 0)
+        road_groups.setdefault(rid, []).append(wp)
+    for rid, wps in road_groups.items():
+        lane_ids = sorted(set(wp["lane_id"] for wp in wps))
+        for i in range(len(lane_ids) - 1):
+            nid_a = "road_" + str(rid) + "_lane_" + str(lane_ids[i])
+            nid_b = "road_" + str(rid) + "_lane_" + str(lane_ids[i+1])
+            rels.append({
+                "src_id": nid_a, "dst_id": nid_b,
+                "relation_type": "lane_connects", "frame_id": 0,
+            })
+    for wp in waypoint_data:
+        nid = "road_" + str(wp["road_id"]) + "_lane_" + str(wp["lane_id"])
         left = wp.get("left_lane_id")
         right = wp.get("right_lane_id")
         if left is not None:
-            rels.append({"src_id": nid, "dst_id": f"road_{wp['road_id']}_lane_{left}",
-                         "relation_type": "adjacent_lane", "frame_id": 0})
+            rels.append({
+                "src_id": nid, "dst_id": "road_" + str(wp["road_id"]) + "_lane_" + str(left),
+                "relation_type": "adjacent_lane", "frame_id": 0,
+            })
         if right is not None:
-            rels.append({"src_id": nid, "dst_id": f"road_{wp['road_id']}_lane_{right}",
-                         "relation_type": "adjacent_lane", "frame_id": 0})
+            rels.append({
+                "src_id": nid, "dst_id": "road_" + str(wp["road_id"]) + "_lane_" + str(right),
+                "relation_type": "adjacent_lane", "frame_id": 0,
+            })
+        if wp.get("has_traffic_light", False):
+            rels.append({
+                "src_id": nid, "dst_id": "tl_on_" + nid,
+                "relation_type": "controlled_by", "frame_id": 0,
+            })
     return rels
 
 
