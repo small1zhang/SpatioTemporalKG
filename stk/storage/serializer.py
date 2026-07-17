@@ -48,6 +48,7 @@ def relation_merge_cypher(rel_type: str) -> str:
 def serialize_graph(frame_snapshot, with_relations: bool = True,
                     maneuvers: List = None,
                     interactions: List = None,
+                    behavior_rels: List = None,
                     rule_out: Dict = None,
                     merge_violations: bool = True) -> Dict[str, Any]:
     """把单帧 (或帧列表) 的场景快照序列化为 {nodes, edges} JSON.
@@ -90,6 +91,10 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
         for i in interactions:
             f = i.get("frame_id") if isinstance(i, dict) else getattr(i, "frame_id", 0)
             int_map.setdefault(f, []).append(i)
+    if behavior_rels is not None:
+        for br in behavior_rels:
+            f = br.get("frame_id", 0) if isinstance(br, dict) else getattr(br, "frame_id", 0)
+            beh_rel_map.setdefault(f, []).append(br)
     if rule_out is not None:
         for ro in rule_out:
             f = ro.get("frame_id") if isinstance(ro, dict) else getattr(ro, "frame_id", 0)
@@ -229,6 +234,18 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
                 if actor:
                     _add_edge(edges, {"src_id": eid, "dst_id": actor,
                                       "relation_type": "responsibleFor", "frame_id": fid}, fid)
+
+        # --- Behavior relations ---
+        for br in beh_rel_map.get(fid, []):
+            if isinstance(br, dict):
+                _add_edge(edges, br, fid)
+            else:
+                _add_edge(edges, {
+                    "src_id": getattr(br, "src_entity_id", getattr(br, "src_id", "")),
+                    "dst_id": getattr(br, "dst_entity_id", getattr(br, "dst_id", "")),
+                    "relation_type": getattr(br, "relation_type", ""),
+                    "frame_id": getattr(br, "frame_id", fid),
+                }, fid)
 
         # --- Scene relations ---
         if with_relations:
