@@ -345,7 +345,14 @@ def main():
                 av["current_lane_id"] = f"road_{src.get('road_id',0)}_lane_{src['lane_id']}"
 
         tl = extract_all_traffic_lights(raw.get("traffic_lights", []))
-        weather = build_environment_snapshot(raw.get("weather", {}), raw["frame_id"])
+        weather = build_environment_snapshot(
+            raw.get("weather", {}), raw["frame_id"],
+            elapsed_seconds=raw.get("elapsed_seconds", 0.0),
+            delta_seconds=tick_s,
+            map_name=map_.name,
+            traffic_density=len(actors.get("vehicles", [])) + len(spawned_vehicles if 'spawned_vehicles' in dir() else []),
+            random_seed=args.seed,
+        )
         lanes = extract_waypoints(raw.get("waypoints", []))
         topo = build_lane_topology(raw.get("waypoints", []))
         spatial_rels = []
