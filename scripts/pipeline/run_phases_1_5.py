@@ -527,6 +527,7 @@ def main():
     phase3_maneuvers_raw = []
     phase3_interactions_raw = []
     phase3_behavior_rels_raw = []
+    phase3_cross_layer_rels_raw = []
     phase3_ruleouts_raw = []
     for snap in phase2_frames:
         veh_str = [{**v, "entity_id": str(v.get("entity_id", v.get("id", "")))} for v in snap["vehicles"]]
@@ -540,6 +541,7 @@ def main():
         phase3_maneuvers_raw.extend(beh_out.get("maneuvers", []))
         phase3_interactions_raw.extend(beh_out.get("interactions", []))
         phase3_behavior_rels_raw.extend(beh_out.get("behavior_rels", []))
+        phase3_cross_layer_rels_raw.extend(beh_out.get("cross_layer_rels", []))
         phase3_beh.append({
             "frame_id": snap["frame_id"],
             "n_maneuvers": len(beh_out.get("maneuvers", [])),
@@ -608,6 +610,7 @@ def main():
                                 maneuvers=phase3_maneuvers_raw,
                                 interactions=phase3_interactions_raw,
                                 behavior_rels=phase3_behavior_rels_raw,
+                                cross_layer_rels=phase3_cross_layer_rels_raw,
                                 rule_out=phase3_ruleouts_raw)
     with open(out_dir / "phase5_graph.json", "w", encoding="utf-8") as f:
         json.dump(graph_obj, f, ensure_ascii=False, indent=2, default=str)

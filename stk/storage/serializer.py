@@ -49,6 +49,7 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
                     maneuvers: List = None,
                     interactions: List = None,
                     behavior_rels: List = None,
+                    cross_layer_rels: List = None,
                     rule_out: Dict = None,
                     merge_violations: bool = True) -> Dict[str, Any]:
     """把单帧 (或帧列表) 的场景快照序列化为 {nodes, edges} JSON.
@@ -95,6 +96,11 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
         for br in behavior_rels:
             f = br.get("frame_id", 0) if isinstance(br, dict) else getattr(br, "frame_id", 0)
             beh_rel_map.setdefault(f, []).append(br)
+    cross_rel_map = {}
+    if cross_layer_rels is not None:
+        for cr in cross_layer_rels:
+            f = cr.get("frame_id", 0) if isinstance(cr, dict) else getattr(cr, "frame_id", 0)
+            cross_rel_map.setdefault(f, []).append(cr)
     if rule_out is not None:
         for ro in rule_out:
             f = ro.get("frame_id") if isinstance(ro, dict) else getattr(ro, "frame_id", 0)
@@ -234,6 +240,31 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
                 if actor:
                     _add_edge(edges, {"src_id": eid, "dst_id": actor,
                                       "relation_type": "responsibleFor", "frame_id": fid}, fid)
+
+        # --- Cross-layer relations (manifestsAs / actor / src / dst) ---
+        for cr in cross_rel_map.get(fid, []):
+            if isinstance(cr, dict):
+                _add_edge(edges, cr, fid)
+            else:
+                _add_edge(edges, {
+                    "src_id": str(getattr(cr, "src_entity_id", getattr(cr, "src_id", ""))),
+                    "dst_id": str(getattr(cr, "dst_entity_id", getattr(cr, "dst_id", ""))),
+                    "relation_type": getattr(cr, "relation_type", ""),
+                    "frame_id": getattr(cr, "frame_id", fid),
+                }, fid)
+
+        # --- Frame -> maneuver / interaction (has_maneuver / has_interaction) ---
+        scene_id_xf = f"scenario_frame_{fid}"
+        for m in man_map.get(fid, []):
+            m_eid = str(getattr(m, "entity_id", m.get("entity_id", "") if isinstance(m, dict) else ""))
+            if m_eid:
+                _add_edge(edges, {"src_id": scene_id_xf, "dst_id": m_eid,
+                                  "relation_type": "has_maneuver", "frame_id": fid}, fid)
+        for it in int_map.get(fid, []):
+            it_eid = str(getattr(it, "entity_id", it.get("entity_id", "") if isinstance(it, dict) else ""))
+            if it_eid:
+                _add_edge(edges, {"src_id": scene_id_xf, "dst_id": it_eid,
+                                  "relation_type": "has_interaction", "frame_id": fid}, fid)
 
         # --- Behavior relations ---
         for br in beh_rel_map.get(fid, []):
