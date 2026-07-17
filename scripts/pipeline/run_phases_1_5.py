@@ -58,7 +58,7 @@ def collect_waypoints(world, max_count: int = 2000):
             out.append({
                 "road_id": int(tid),
                 "lane_id": int(lid),
-                "junction_id": -1 if wp.is_junction else -1,
+                "junction_id": int(wp.get_junction().id) if wp.is_junction and wp.get_junction() is not None else -1,
                 "lane_type": str(wp.lane_type).split(".")[-1],
                 "lane_width": float(wp.lane_width),
                 "x": float(loc.x), "y": float(loc.y), "z": float(loc.z),
@@ -158,6 +158,14 @@ def main():
         try:
             lane_wps = collect_waypoints(world, max_count=2000)
             print(f"[+] {len(lane_wps)} unique driving lanes")
+            # Lane反向标注: 标记每条车道是否受交通灯控制
+            tls_for_lane = world.get_actors().filter("traffic.traffic_light*")
+            lane_ids_with_tl = set()
+            for tl in tls_for_lane:
+                lane_ids_with_tl.update(tl.get_affected_lane_id_list())
+            for wp in lane_wps:
+                wp["has_traffic_light"] = wp["lane_id"] in lane_ids_with_tl
+            print(f"    {len(lane_ids_with_tl)} lane(s) controlled by traffic lights")
         except Exception as e:
             print(f"[!] cant collect waypoints: {e}")
             lane_wps = []

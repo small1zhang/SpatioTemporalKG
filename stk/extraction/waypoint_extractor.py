@@ -21,6 +21,9 @@ def extract_waypoints(waypoint_data: List[dict]) -> List[Dict[str, Any]]:
             "center_y": wp.get("y", 0.0),
             "center_z": wp.get("z", 0.0),
             "heading_rad": wp.get("heading_rad", 0.0),
+            "left_lane_id": wp.get("left_lane_id"),
+            "right_lane_id": wp.get("right_lane_id"),
+            "has_traffic_light": wp.get("has_traffic_light", False),
         }
         roads.append(road)
     return roads
