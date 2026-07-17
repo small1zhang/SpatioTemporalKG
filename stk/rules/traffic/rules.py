@@ -10,6 +10,9 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
+from stk.config import ThresholdConfig
+_THRESHOLDS = ThresholdConfig.default()
+
 
 def severity_from_ttec(distance, threshold_near, threshold_far, max_sev=0.9, min_sev=0.2):
     """基于距离的严重度插值。"""
@@ -83,8 +86,9 @@ def check_R4_opposite_meeting(
     WrongSideMeetingViolation(A,B,t) <=>
       opposite_direction(A,B,t) AND is_in_opposite_lane(A,B,t) AND distance < 10
     """
-    is_violation = is_opposite_lane and distance < 10.0
-    sev = severity_from_ttec(distance, 2.0, 10.0) if is_violation else 0.0
+    _opp_dist = _THRESHOLDS.opposite_lane_violation_distance
+    is_violation = is_opposite_lane and distance < _opp_dist
+    sev = severity_from_ttec(distance, 2.0, _opp_dist) if is_violation else 0.0
     return is_violation, sev, {"distance": distance, "is_opposite_lane": is_opposite_lane}
 
 
@@ -141,8 +145,10 @@ def check_R8_vulnerable_protection(
     """
     speed = vehicle.get("speed_kmh", vehicle.get("speed", 0.0) * 3.6)
     bad_weather = weather_severity in ("poor", "severely_reduced")
-    is_violation = bad_weather and distance < 20.0 and speed > school_zone_speed_limit
-    sev = severity_from_ttec(distance, 5.0, 20.0) if is_violation else 0.0
+    _bad_weather_dist = _THRESHOLDS.bad_weather_distance
+    _school_limit = _THRESHOLDS.school_zone_speed_limit
+    is_violation = bad_weather and distance < _bad_weather_dist and speed > _school_limit
+    sev = severity_from_ttec(distance, 5.0, _bad_weather_dist) if is_violation else 0.0
     return is_violation, sev, {
         "distance": distance, "weather": weather_severity,
         "speed_kmh": speed, "limit": school_zone_speed_limit,
@@ -215,7 +221,9 @@ def check_R13_illegal_stop(
       speed < 0.3 AND A in NoStopZone AND duration >= 30 frames
     """
     speed = vehicle.get("speed", 0.0)
-    is_violation = speed < 0.3 and in_no_stop_zone and duration_frames >= 30
+    _no_stop_speed = _THRESHOLDS.no_stop_speed_threshold
+    _no_stop_dur = _THRESHOLDS.no_stop_duration_frames
+    is_violation = speed < _no_stop_speed and in_no_stop_zone and duration_frames >= _no_stop_dur
     sev = 0.5 if is_violation else 0.0
     return is_violation, sev, {"speed": speed, "in_no_stop_zone": in_no_stop_zone, "duration": duration_frames}
 

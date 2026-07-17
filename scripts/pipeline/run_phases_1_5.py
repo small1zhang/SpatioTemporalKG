@@ -86,7 +86,20 @@ def main():
     p.add_argument("--no-spawn", action="store_true")
     p.add_argument("--town", default=None)
     p.add_argument("--no-lanes", action="store_true")
+    p.add_argument("--thresholds-json", type=str, default=None,
+                   help="ThresholdConfig JSON 字符串覆盖默认阈值, 例如 {'ttc_critical':5.0}")
     args = p.parse_args()
+    if getattr(args, "thresholds_json", None):
+        import json as _json
+        from stk.config import ThresholdConfig
+        from stk.behavior import detectors as _det
+        from stk.scenario import spatial as _sp
+        from stk.rules.traffic import rules as _rl
+        _cfg = ThresholdConfig.from_dict(_json.loads(args.thresholds_json))
+        _det.set_threshold_config(_cfg)
+        _sp.set_threshold_config(_cfg)
+        _rl._THRESHOLDS = _cfg
+        print(f"[meta] thresholds overrided: {args.thresholds_json}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = _REPO / args.out / f"phases_{timestamp}_{args.frames}f"

@@ -21,23 +21,39 @@ from stk.scenario.nodes import VehicleEntity
 # ============================================================
 # 检测阈值 (可根据场景进行调整)
 # ============================================================
+# 所有阈值都从 ThresholdConfig 读, 但保留下面这些模块级常量作为
+# 默认回退, 也方便未调用 set_threshold_config() 的旧代码继续工作.
+# 调用 set_threshold_config(cfg) 即可在运行时替换.
+
+from stk.config import ThresholdConfig
+
+_THRESHOLDS = ThresholdConfig.default()
+
+def set_threshold_config(cfg: ThresholdConfig) -> None:
+    """运行时替换阈值配置. cfg 是 ThresholdConfig 实例."""
+    global _THRESHOLDS
+    _THRESHOLDS = cfg
+
+def get_threshold_config() -> ThresholdConfig:
+    return _THRESHOLDS
+
 
 # 跟驰 TTC 阈值 (秒)：TTC < 3s 认为高风险跟随
-TTC_CRITICAL = 3.0
+TTC_CRITICAL = _THRESHOLDS.ttc_critical
 # 跟驰距离阈值 (米)
-FOLLOWING_MAX_DISTANCE = 100.0
+FOLLOWING_MAX_DISTANCE = _THRESHOLDS.following_max_distance
 # 静止速度阈值 (m/s)
-STANDING_SPEED_THRESHOLD = 0.5
+STANDING_SPEED_THRESHOLD = _THRESHOLDS.standing_speed_threshold
 # 变道横向速度阈值 (m/s)
-LANE_CHANGE_LATERAL_SPEED = 0.3
+LANE_CHANGE_LATERAL_SPEED = _THRESHOLDS.lane_change_lateral_speed
 # 行人距离阈值 (米) — 初次激活让行/接近检测
-PEDESTRIAN_ACTIVATION_DISTANCE = 50.0
+PEDESTRIAN_ACTIVATION_DISTANCE = _THRESHOLDS.pedestrian_activation_distance
 # 路口距离阈值 (米)
-JUNCTION_ACTIVATION_DISTANCE = 30.0
+JUNCTION_ACTIVATION_DISTANCE = _THRESHOLDS.junction_activation_distance
 # 对向相向判定：航向差阈值 (rad)
-OPPOSITE_HEADING_DIFF = 2.5  # ~143 deg
+OPPOSITE_HEADING_DIFF = 2.5  # ~143 deg ( Carlo 物理约束, 不参与 config)
 # 并排: 横向距离阈值 (米)
-BESIDE_LATERAL_THRESHOLD = 2.5
+BESIDE_LATERAL_THRESHOLD = _THRESHOLDS.beside_lateral_max
 
 
 # ============================================================
@@ -161,7 +177,7 @@ def detect_yielding_to(vehicle: Dict[str, Any],
     speed = vehicle.get("speed", 0.0)
     ped_action = pedestrian.get("action", "Idle")
 
-    condition_met = (distance < PEDESTRIAN_ACTIVATION_DISTANCE and speed < 1.5)
+    condition_met = (distance < PEDESTRIAN_ACTIVATION_DISTANCE and speed < _THRESHOLDS.pedestrian_approach_speed_ceiling)
     return (condition_met, {
         "distance": round(distance, 2),
         "ped_action": ped_action,
@@ -243,10 +259,12 @@ def detect_blocked_view(observer: Dict[str, Any],
     t_y = target.get("location_y", 0.0)
     longitudinal_diff = abs(o_x - t_x)
     lateral_diff = abs(o_y - t_y)
-    # 前后距离 < 30m, 横向距离 < 3m 视为可能遮挡
-    condition_met = longitudinal_diff < 30.0 and lateral_diff < 3.0
+    # 前后距离 < occ_long_max, 横向距离 < occ_lat_max 视为可能遮挡
+    occ_long_max = _THRESHOLDS.occlusion_longitudinal_max
+    occ_lat_max = _THRESHOLDS.occlusion_lateral_max
+    condition_met = longitudinal_diff < occ_long_max and lateral_diff < occ_lat_max
     return (condition_met, {
-        "occlusion_ratio": round(1.0 - longitudinal_diff / 30.0, 2),
+        "occlusion_ratio": round(1.0 - longitudinal_diff / occ_long_max, 2),
     })
 
 

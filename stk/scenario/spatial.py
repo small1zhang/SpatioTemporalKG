@@ -26,6 +26,14 @@ from stk.scenario.relations import (
     nearby_pedestrian, on_road,
 )
 
+from stk.config import ThresholdConfig
+_THRESHOLDS = ThresholdConfig.default()
+
+def set_threshold_config(cfg):
+    global _THRESHOLDS
+    _THRESHOLDS = cfg
+
+
 
 def _location(entity: "BaseEntity") -> Optional[Tuple[float, float, float]]:
     """从实体 attrs 中安全获取位置。"""
@@ -43,7 +51,8 @@ def _heading(entity: "BaseEntity") -> float:
     return attrs.get("heading_rad", 0.0)
 
 
-def compute_in_lane(vehicles: List, lanes: List[Dict], frame_id: int) -> List[BaseRelation]:
+def compute_in_lane(vehicles: List, lanes: List[Dict], frame_id: int,
+                  lane_match_distance: Optional[float] = None) -> List[BaseRelation]:
     """InLane: 计算每个车辆所在的车道 (v3 §2.9.1)。
 
     通过 waypoint.get_waypoint(location) 比较 lane_id。
@@ -80,13 +89,15 @@ def compute_in_lane(vehicles: List, lanes: List[Dict], frame_id: int) -> List[Ba
             if dist < best_dist:
                 best_dist = dist
                 best_lane = lane
-        if best_lane is not None and best_dist < 10.0:  # 阈值 10m
+        _thr = lane_match_distance if lane_match_distance is not None else _THRESHOLDS.max_lane_match_distance
+        if best_lane is not None and best_dist < _thr:
             lane_id = best_lane.get("entity_id","") if isinstance(best_lane, dict) else best_lane.entity_id
             results.append(in_lane(v.entity_id, lane_id, frame_id, frame_id, best_dist))
     return results
 
 
-def compute_ahead_of(vehicles: List, frame_id: int) -> List[BaseRelation]:
+def compute_ahead_of(vehicles: List, frame_id: int,
+                 lateral_max: Optional[float] = None) -> List[BaseRelation]:
     """AheadOf: 同车道后车→前车 (v3 §2.9.2)。
 
     判断条件：is_in_same_lane(v, w) 且 longitudinal_distance(v, w) > 0。
@@ -106,12 +117,15 @@ def compute_ahead_of(vehicles: List, frame_id: int) -> List[BaseRelation]:
             dy = loc_w[1] - loc_v[1]
             long_dist = dx * math.cos(heading_v) + dy * math.sin(heading_v)
             lat_dist = -dx * math.sin(heading_v) + dy * math.cos(heading_v)
-            if long_dist > 0 and abs(lat_dist) < 3.5:  # 同车道或邻车道
+            _lat_max = lateral_max if lateral_max is not None else _THRESHOLDS.lane_width_max
+            if long_dist > 0 and abs(lat_dist) < _lat_max:
                 results.append(ahead_of(w.entity_id, v.entity_id, frame_id, long_dist, lat_dist))
     return results
 
 
-def compute_beside(vehicles: List, frame_id: int) -> List[BaseRelation]:
+def compute_beside(vehicles: List, frame_id: int,
+               lateral_max: Optional[float] = None,
+               longitudinal_max: Optional[float] = None) -> List[BaseRelation]:
     """Beside: 并排 (v3 §2.9.2) |lateral| < 3m, |longitudinal| < 5m。"""
     results: List[BaseRelation] = []
     for v in vehicles:
@@ -128,14 +142,17 @@ def compute_beside(vehicles: List, frame_id: int) -> List[BaseRelation]:
             long_dist = dx * math.cos(heading_v) + dy * math.sin(heading_v)
             lat_dist = -dx * math.sin(heading_v) + dy * math.cos(heading_v)
             # v3 §2.9.2: |lateral| ≤ 3m（含边界）、|longitudinal| < 5m 视为并排
-            if abs(lat_dist) <= 3.0 and abs(long_dist) < 5.0:
+            _lat_max = lateral_max if lateral_max is not None else _THRESHOLDS.beside_lateral_max
+            _long_max = longitudinal_max if longitudinal_max is not None else _THRESHOLDS.beside_longitudinal_max
+            if abs(lat_dist) <= _lat_max and abs(long_dist) < _long_max:
                 results.append(beside(v.entity_id, w.entity_id, frame_id, lat_dist, long_dist))
     return results
 
 
-def compute_nearby_pedestrian(vehicles: List, pedestrians: List, frame_id: int, threshold: float = 20.0) -> List[BaseRelation]:
+def compute_nearby_pedestrian(vehicles: List, pedestrians: List, frame_id: int, threshold: Optional[float] = None) -> List[BaseRelation]:
     """NearbyPedestrian: 车辆附近行人 (v3 §2.9.2) distance < 20m。"""
     results: List[BaseRelation] = []
+    _thr = threshold if threshold is not None else _THRESHOLDS.nearby_pedestrian_max
     for v in vehicles:
         loc_v = _location(v)
         if loc_v is None:
@@ -145,7 +162,7 @@ def compute_nearby_pedestrian(vehicles: List, pedestrians: List, frame_id: int, 
             if loc_p is None:
                 continue
             dist = math.sqrt((loc_v[0] - loc_p[0])**2 + (loc_v[1] - loc_p[1])**2)
-            if dist < threshold:
+            if dist < _thr:
                 results.append(nearby_pedestrian(v.entity_id, p.entity_id, frame_id, dist))
     return results
 
