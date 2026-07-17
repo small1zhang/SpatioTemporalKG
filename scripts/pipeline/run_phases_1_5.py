@@ -444,6 +444,43 @@ def main():
                 "relation_type": getattr(r, "relation_type", ""),
                 "frame_id": getattr(r, "frame_id", raw["frame_id"]),
             })
+        # T2.3: 聚合关系 — containsTrafficLight / containsRoad / hasEnvironment / weather_context
+        scene_id = f"scenario_frame_{raw['frame_id']}"
+        env_id = f"env_frame_{raw['frame_id']}"
+        # (a) containsTrafficLight: frame -> each TL
+        tl_ids_seen = set()
+        for tl_dict in tl:
+            tl_eid = str(tl_dict.get("entity_id", ""))
+            if not tl_eid or tl_eid in tl_ids_seen: continue
+            tl_ids_seen.add(tl_eid)
+            spatial_rels_dicts.append({
+                "src_id": scene_id, "dst_id": tl_eid,
+                "relation_type": "containsTrafficLight",
+                "frame_id": raw["frame_id"],
+            })
+        # (b) containsRoad: frame -> each unique road_id (deduped)
+        road_ids_seen = set()
+        for ln in lanes:
+            rid = str(ln.get("road_id", ""))
+            if not rid or rid in road_ids_seen: continue
+            road_ids_seen.add(rid)
+            spatial_rels_dicts.append({
+                "src_id": scene_id, "dst_id": f"road_{rid}",
+                "relation_type": "containsRoad",
+                "frame_id": raw["frame_id"],
+            })
+        # (c) hasEnvironment: frame -> environment snapshot
+        spatial_rels_dicts.append({
+            "src_id": scene_id, "dst_id": env_id,
+            "relation_type": "hasEnvironment",
+            "frame_id": raw["frame_id"],
+        })
+        # (d) weather_context: env -> frame
+        spatial_rels_dicts.append({
+            "src_id": env_id, "dst_id": scene_id,
+            "relation_type": "weather_context",
+            "frame_id": raw["frame_id"],
+        })
         all_scene_rels = topo + spatial_rels_dicts
 
         fd = FrameData(
