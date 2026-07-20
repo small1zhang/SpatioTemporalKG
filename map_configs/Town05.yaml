@@ -1,0 +1,37 @@
+map_name: Town05
+description: Open suburban map with moderate junction density based on experimental scenario library
+waypoint_count: 12224
+junction_count: 206
+junction_percentage: 27.7
+lane_types:
+  - Driving
+enabled_scenarios:
+  - S00
+  - S01
+  - S02
+  - S10
+  - S11
+  - S12
+  - S13
+  - S20
+  - S21
+  - S22
+  - S30
+  - S31
+  - S32
+  - S33
+scenario_parameters:
+  S00: {vehicle_count: 5, expected_violations: 0, road_type: suburban_open}
+  S01: {traffic_light_count: 7, green_ratio: 0.5}
+  S02: {pedestrian_count: 8, crosswalk_distance: 18.0}
+  S10: {pedestrian_appearance_sudden: true, appearance_distance: 10.0}
+  S11: {oncoming_vehicle_probability: 0.4}
+  S12: {red_light_violation_prob: 0.25}
+  S13: {follow_distance_min: 6.0, follow_distance_max: 20.0}
+  S20: {merge_lane_angle: 12.0, merge_speed_diff: 10.0}
+  S21: {vehicle_count: 3, priority_rules: yield_to_right}
+  S22: {emergency_vehicle_count: 1, emergency_priority: true}
+  S30: {night_mode: true, pedestrian_appearance_sudden: true}
+  S31: {weather_rain: true, visibility_reduction: 0.3}
+  S32: {construction_zone_length: 60.0, lane_reduction: 2}
+  S33: {backlight_angle: 190.0, pedestrian_group_size: 4}
