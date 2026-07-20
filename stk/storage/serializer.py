@@ -363,15 +363,36 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
         # --- Scene relations ---
         if with_relations:
             for rel in snap.get("scene_rels", []):
-                _add_edge(edges, rel, fid)
+                _add_edge_and_target_node(edges, nodes, rel, fid, _scene_rel_factory)
 
             # 隐式关系: 车辆在车道
             for v in snap.get("vehicles", []):
-                lane_id = v.get("lane_id") or v.get("current_lane_id")
                 veh_id = v.get("entity_id") or v.get("id")
+                # 优先使用 current_lane_id (run_phases_1_5.py 已经拼好 road_X_lane_Y)
+                lane_id = v.get("current_lane_id")
+                if not lane_id:
+                    raw_lane_id = v.get("lane_id")
+                    raw_road_id = v.get("road_id", 0)
+                    if isinstance(raw_lane_id, str) and raw_lane_id.startswith("road_"):
+                        lane_id = raw_lane_id
+                    elif raw_lane_id is not None:
+                        lane_id = f"road_{raw_road_id}_lane_{raw_lane_id}"
                 if lane_id and veh_id:
+                    # 若车道节点不在已有集合中，自动补建一个最小 RoadElement 节点
+                    if str(lane_id) not in nodes:
+                        nodes[str(lane_id)] = {
+                            "id": str(lane_id), "type": "RoadElement",
+                            "first_frame": fid, "last_frame": fid,
+                            "attrs": {
+                                "entity_id": str(lane_id),
+                                "entity_type": "RoadElement",
+                                "lane_id": v.get("lane_id"),
+                                "road_id": v.get("road_id"),
+                                "frame_id": fid,
+                            },
+                        }
                     _add_edge(edges, {
-                        "src_id": str(veh_id), "dst_id": str(lane_id) if isinstance(lane_id, str) else f"road_0_lane_{lane_id}",
+                        "src_id": str(veh_id), "dst_id": str(lane_id),
                         "relation_type": "in_lane", "frame_id": fid,
                     }, fid)
 
@@ -624,3 +645,70 @@ def _add_edge(edges, rel, fid):
         }
     else:
         edges[key]["last_frame"] = fid
+
+
+def _scene_rel_factory(edge_dict, fid):
+    """对 scene_rels 中的 in_junction 等关系, 在 dst 端补建虚拟节点 (避免悬空边).
+
+    返回: (node_dict, None) 或 (None, None)
+      node_dict: 应创建的虚拟节点 (若需要), 由 caller 注入到 nodes 集合中
+    """
+    rt = edge_dict.get("relation_type") or edge_dict.get("rel_type") or edge_dict.get("type")
+    if rt == "in_junction":
+        jid = str(edge_dict.get("dst_id", ""))
+        # jid 形如 "junction_<int>"
+        attrs = {
+            "entity_id": jid,
+            "entity_type": "Junction",
+            "frame_id": fid,
+        }
+        # 尝试解析 junction 数字 id
+        if jid.startswith("junction_"):
+            try:
+                attrs["junction_id"] = int(jid.split("_", 1)[1])
+            except ValueError:
+                pass
+        return ({
+            "id": jid, "type": "Junction",
+            "first_frame": fid, "last_frame": fid,
+            "attrs": attrs,
+        }, None)
+    return (None, None)
+
+
+def _add_edge_and_target_node(edges, nodes, rel, fid, factory=None):
+    """添加 edge; 若 edge 端点节点不存在, 通过 factory 尝试补建缺失节点.
+
+    factory(edge_dict, fid) -> (target_node_or_None, _)
+    """
+    # 先添加 edge
+    _add_edge(edges, rel, fid)
+    if factory is None:
+        return
+    # 解析 edge 信息
+    if isinstance(rel, dict):
+        dst = str(rel.get("dst_id") or rel.get("dst_entity_id") or "")
+        rt = rel.get("relation_type") or rel.get("rel_type") or rel.get("type")
+    else:
+        dst = str(getattr(rel, "dst_id", getattr(rel, "dst_entity_id", "")))
+        rt = getattr(rel, "relation_type", getattr(rel, "rel_type", ""))
+        rel = {
+            "src_id": str(getattr(rel, "src_id", getattr(rel, "src_entity_id", ""))),
+            "dst_id": dst, "relation_type": rt, "frame_id": fid,
+        }
+    if not dst or not rt:
+        return
+    # 若 dst 节点已存在, 无需补建
+    if dst in nodes:
+        return
+    target_node, _ = factory(rel, fid)
+    if target_node is not None:
+        # 多帧 junction 复用同一节点, 扩展 last_frame 范围
+        if dst in nodes:
+            nodes[dst]["last_frame"] = max(nodes[dst].get("last_frame", fid), fid)
+            # 合并 frame_id 列表
+            ea = nodes[dst]["attrs"]
+            ea["frame_id"] = fid  # 当前帧
+            ea.setdefault("frames_seen", []).append(fid)
+        else:
+            nodes[dst] = target_node
