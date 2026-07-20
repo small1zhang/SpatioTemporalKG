@@ -105,10 +105,12 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
     if rule_out is not None:
         for ro in rule_out:
             f = ro.get("frame_id") if isinstance(ro, dict) else getattr(ro, "frame_id", 0)
-            vio = ro.get("violations") if isinstance(ro, dict) else getattr(ro, "violations", [])
-            resp = ro.get("responsibilities") if isinstance(ro, dict) else getattr(ro, "responsibilities", [])
-            vio_map.setdefault(f, []).extend(vio)
-            resp_map.setdefault(f, []).extend(resp)
+            vio = ro.get("violations") if isinstance(ro, dict) else getattr(ro, "violations", None)
+            resp = ro.get("responsibilities") if isinstance(ro, dict) else getattr(ro, "responsibilities", None)
+            if vio:
+                vio_map.setdefault(f, []).extend(vio)
+            if resp:
+                resp_map.setdefault(f, []).extend(resp)
 
     def _node_key(eid, ntype):
         return (str(eid), ntype)
@@ -118,6 +120,57 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
 
     sv_buffer: Dict[int, List] = {}
     ra_buffer: Dict[int, List] = {}
+
+    # ── 创建 ScenarioSnapshot 节点 (每帧一个) ──
+    for snap in frames:
+        fid = snap.get("frame_id", 0)
+        scene_id = f"scenario_frame_{fid}"
+        if scene_id not in nodes:
+            nodes[scene_id] = {
+                "id": scene_id, "type": "ScenarioSnapshot",
+                "first_frame": fid, "last_frame": fid,
+                "attrs": {
+                    "frame_id": fid,
+                    "entity_type": "ScenarioSnapshot",
+                    "elapsed_seconds": snap.get("elapsed_seconds", 0.0),
+                    "delta_seconds": snap.get("delta_seconds", 0.05),
+                    "vehicle_count": len(snap.get("vehicles", [])),
+                    "pedestrian_count": len(snap.get("pedestrians", [])),
+                    "traffic_light_count": len(snap.get("traffic_lights", [])),
+                    "lane_count": len(snap.get("lanes", [])),
+                },
+            }
+        # EnvironmentSnapshot 节点也在此创建
+        env_id = f"env_frame_{fid}"
+        if env_id not in nodes:
+            weather = snap.get("weather", {})
+            nodes[env_id] = {
+                "id": env_id, "type": "EnvironmentSnapshot",
+                "first_frame": fid, "last_frame": fid,
+                "attrs": {
+                    "frame_id": fid,
+                    "entity_type": "EnvironmentSnapshot",
+                    "elapsed_seconds": snap.get("elapsed_seconds", 0.0),
+                    "delta_seconds": snap.get("delta_seconds", 0.05),
+                    **({} if isinstance(weather, str) else weather),
+                },
+            }
+
+    # ── 创建时序边 (前后帧连接) ──
+    frame_ids = sorted(set(snap.get("frame_id", 0) for snap in frames))
+    for i in range(len(frame_ids) - 1):
+        f_curr = frame_ids[i]
+        f_next = frame_ids[i + 1]
+        scene_curr = f"scenario_frame_{f_curr}"
+        scene_next = f"scenario_frame_{f_next}"
+        if scene_curr in nodes and scene_next in nodes:
+            edges[(scene_curr, scene_next, "next_frame")] = {
+                "src_id": scene_curr, "dst_id": scene_next,
+                "type": "next_frame",
+                "first_frame": f_curr, "last_frame": f_next,
+                "frame_id": f_curr, "attrs": {"delta": f_next - f_curr},
+            }
+
     for snap in frames:
         fid = snap.get("frame_id", 0)
 
@@ -245,14 +298,42 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
         # --- Cross-layer relations (manifestsAs / actor / src / dst) ---
         for cr in cross_rel_map.get(fid, []):
             if isinstance(cr, dict):
-                _add_edge(edges, cr, fid)
+                cr_dict = cr
             else:
-                _add_edge(edges, {
+                cr_dict = {
                     "src_id": str(getattr(cr, "src_entity_id", getattr(cr, "src_id", ""))),
                     "dst_id": str(getattr(cr, "dst_entity_id", getattr(cr, "dst_id", ""))),
                     "relation_type": getattr(cr, "relation_type", ""),
                     "frame_id": getattr(cr, "frame_id", fid),
-                }, fid)
+                    "attrs": getattr(cr, "attrs", {}),
+                }
+            # manifestsAs 边指向虚拟节点 src__dst, 需要创建该虚拟节点
+            if cr_dict.get("relation_type") == "manifestsAs":
+                virtual_id = cr_dict["dst_id"]
+                if virtual_id and virtual_id not in nodes:
+                    # 从 attrs 中提取行为关系信息
+                    cr_attrs = cr_dict.get("attrs", {})
+                    if isinstance(cr_attrs, dict):
+                        beh_type = cr_attrs.get("relation_type", "")
+                        beh_src = cr_attrs.get("behavior_relation_src", "")
+                        beh_dst = cr_attrs.get("behavior_relation_dst", "")
+                    else:
+                        beh_type = ""
+                        beh_src = ""
+                        beh_dst = ""
+                    nodes[virtual_id] = {
+                        "id": virtual_id, "type": "BehaviorRelation",
+                        "first_frame": fid, "last_frame": fid,
+                        "attrs": {
+                            "entity_id": virtual_id,
+                            "entity_type": "BehaviorRelation",
+                            "relation_type": beh_type,
+                            "src_entity": beh_src,
+                            "dst_entity": beh_dst,
+                            "frame_id": fid,
+                        },
+                    }
+            _add_edge(edges, cr_dict, fid)
 
         # --- Frame -> maneuver / interaction (has_maneuver / has_interaction) ---
         scene_id_xf = f"scenario_frame_{fid}"

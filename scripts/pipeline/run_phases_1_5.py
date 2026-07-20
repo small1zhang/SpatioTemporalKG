@@ -473,14 +473,14 @@ def main():
                 "relation_type": "containsTrafficLight",
                 "frame_id": raw["frame_id"],
             })
-        # (b) containsRoad: frame -> each unique road_id (deduped)
-        road_ids_seen = set()
+        # (b) containsRoad: frame -> each lane (road_X_lane_Y)
+        road_lane_seen = set()
         for ln in lanes:
-            rid = str(ln.get("road_id", ""))
-            if not rid or rid in road_ids_seen: continue
-            road_ids_seen.add(rid)
+            ln_id = str(ln.get("entity_id", ""))
+            if not ln_id or ln_id in road_lane_seen: continue
+            road_lane_seen.add(ln_id)
             spatial_rels_dicts.append({
-                "src_id": scene_id, "dst_id": f"road_{rid}",
+                "src_id": scene_id, "dst_id": ln_id,
                 "relation_type": "containsRoad",
                 "frame_id": raw["frame_id"],
             })
