@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SpatioTemporalKG - 时空动态知识图谱可视化</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+:root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3a;--text:#e0e0e0;--text2:#8b8fa3;--accent:#6366f1;--green:#22c55e;--red:#ef4444;--yellow:#eab308;--blue:#3b82f6;--purple:#8b5cf6;--orange:#f97316;--cyan:#06b6d4;--pink:#ec4899}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:'Inter','Segoe UI',sans-serif;overflow-x:hidden}
+.header{background:linear-gradient(135deg,#1e1b4b,#312e81);padding:20px 28px;border-bottom:1px solid var(--border)}
+.header h1{font-size:24px;font-weight:700}.header p{color:var(--text2);margin-top:2px;font-size:13px}
+.tabs{display:flex;gap:3px;padding:10px 28px;background:var(--card);border-bottom:1px solid var(--border)}
+.tab{padding:8px 16px;border-radius:6px 6px 0 0;cursor:pointer;font-size:13px;font-weight:500;background:transparent;color:var(--text2);border:1px solid transparent;transition:all .2s}
+.tab.active{background:var(--bg);color:var(--accent);border-color:var(--border);border-bottom-color:var(--bg)}.tab:hover{color:var(--text)}
+.panel{display:none;padding:20px 28px}.panel.active{display:block}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px}
+.card .label{font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:1px}.card .value{font-size:28px;font-weight:700;margin-top:3px}.card .sub{font-size:12px;color:var(--text2);margin-top:2px}
+.chart-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.chart-box{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;min-height:320px}
+.chart-box h3{font-size:13px;margin-bottom:10px;color:var(--text2)}
+.controls{display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+select,button{background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 12px;font-size:12px;cursor:pointer}
+select:focus,button:focus{outline:none;border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}button.primary:hover{opacity:.9}
+button.sm{padding:4px 10px;font-size:11px}
+.heatmap-container{overflow-x:auto}
+.heatmap-table{border-collapse:collapse;font-size:11px}.heatmap-table th,.heatmap-table td{padding:6px 10px;text-align:center;border:1px solid var(--border)}
+.heatmap-table th{background:var(--card);color:var(--text2);font-weight:500}.heatmap-table td{font-weight:600}
+.slider-row{display:flex;align-items:center;gap:10px;margin:10px 0}.slider-row input[type=range]{flex:1;accent-color:var(--accent)}.slider-row .frame-label{font-size:12px;color:var(--text2);min-width:80px}
+.spatial-canvas{background:#0f1117;border:1px solid var(--border);border-radius:10px}
+
+/* ── KG 专用样式 ── */
+.kg-layout{display:grid;grid-template-columns:240px 1fr 300px;gap:12px;height:calc(100vh - 220px);min-height:550px}
+.kg-sidebar{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;overflow-y:auto;font-size:12px}
+.kg-sidebar h4{font-size:13px;color:var(--accent);margin:10px 0 6px;border-bottom:1px solid var(--border);padding-bottom:4px}
+.kg-sidebar h4:first-child{margin-top:0}
+.kg-sidebar label{display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer;color:var(--text2);font-size:12px}
+.kg-sidebar label:hover{color:var(--text)}
+.kg-sidebar input[type=checkbox]{accent-color:var(--accent)}
+.kg-sidebar input[type=text]{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:5px 8px;color:var(--text);font-size:12px;margin:4px 0}
+.kg-sidebar .stat{color:var(--text2);font-size:11px;margin:2px 0}
+.kg-main{background:var(--card);border:1px solid var(--border);border-radius:10px;position:relative;overflow:hidden}
+.kg-main svg{width:100%;height:100%}
+.kg-detail{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;overflow-y:auto;font-size:12px}
+.kg-detail h4{font-size:13px;color:var(--accent);margin-bottom:8px}
+.kg-detail .prop{display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border)}
+.kg-detail .prop .k{color:var(--text2)}.kg-detail .prop .v{color:var(--text);font-weight:500;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kg-detail .edge-item{padding:4px 0;border-bottom:1px solid var(--border);font-size:11px}
+.kg-detail .edge-type{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-right:4px}
+.edge-legend{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+.edge-legend-item{display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text2)}
+.edge-legend-line{width:16px;height:2px;border-radius:1px}
+.node-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600}
+
+/* 响应式 */
+@media(max-width:1100px){.kg-layout{grid-template-columns:200px 1fr 240px}.chart-row{grid-template-columns:1fr}}
+@media(max-width:900px){.kg-layout{grid-template-columns:1fr;height:auto}.kg-sidebar,.kg-detail{max-height:300px}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🌐 SpatioTemporalKG 时空动态知识图谱</h1>
+  <p>5 地图 × 14 场景 = 70 采集任务 · CARLA 0.9.16 · 5 阶段提取管线</p>
+</div>
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('overview')">📊 总览</div>
+  <div class="tab" onclick="switchTab('heatmap')">🗺️ 热力图</div>
+  <div class="tab" onclick="switchTab('kg')">🕸️ 知识图谱</div>
+  <div class="tab" onclick="switchTab('trajectory')">🚗 轨迹动画</div>
+  <div class="tab" onclick="switchTab('comparison')">📈 对比分析</div>
+</div>
+
+<!-- 总览 -->
+<div id="panel-overview" class="panel active">
+  <div class="cards" id="summary-cards"></div>
+  <div class="chart-row">
+    <div class="chart-box"><h3>各地图平均节点/边数</h3><div id="chart-map-stats"></div></div>
+    <div class="chart-box"><h3>各场景平均节点数</h3><div id="chart-scenario-stats"></div></div>
+  </div>
+  <div class="chart-row">
+    <div class="chart-box"><h3>采集耗时分布</h3><div id="chart-time-dist"></div></div>
+    <div class="chart-box"><h3>场景分组统计</h3><div id="chart-tier-pie"></div></div>
+  </div>
+</div>
+
+<!-- 热力图 -->
+<div id="panel-heatmap" class="panel">
+  <h3 style="margin-bottom:14px;font-size:14px">节点数热力图 (地图 × 场景)</h3>
+  <div class="heatmap-container" id="heatmap-nodes"></div>
+  <h3 style="margin:20px 0 14px;font-size:14px">边数热力图</h3>
+  <div class="heatmap-container" id="heatmap-edges"></div>
+</div>
+
+<!-- 知识图谱 -->
+<div id="panel-kg" class="panel">
+  <div class="controls">
+    <label>地图 <select id="kg-map"></select></label>
+    <label>场景 <select id="kg-scenario"></select></label>
+    <button class="primary" onclick="loadKG()">🔍 加载图谱</button>
+    <button onclick="resetKGView()">↺ 重置视图</button>
+    <button onclick="exportKG()">📥 导出子图</button>
+    <span id="kg-info" style="color:var(--text2);font-size:12px;margin-left:auto"></span>
+  </div>
+  <div class="kg-layout">
+    <!-- 左侧: 过滤器 -->
+    <div class="kg-sidebar" id="kg-sidebar">
+      <h4>🔎 子图查询</h4>
+      <input type="text" id="kg-search" placeholder="搜索节点 ID / 类型..." oninput="filterKG()">
+      <div style="margin-top:6px">
+        <button class="sm" onclick="selectAllTypes()">全选</button>
+        <button class="sm" onclick="selectNoTypes()">清除</button>
+      </div>
+      <h4>📦 节点类型</h4>
+      <div id="kg-type-filters"></div>
+      <h4>🔗 关系类型</h4>
+      <div id="kg-edge-filters"></div>
+      <h4>📊 子图统计</h4>
+      <div id="kg-subgraph-stats" class="stat"></div>
+    </div>
+    <!-- 中间: 图谱 -->
+    <div class="kg-main" id="kg-viz"></div>
+    <!-- 右侧: 详情 -->
+    <div class="kg-detail" id="kg-detail">
+      <h4>📋 节点详情</h4>
+      <div id="kg-detail-content" style="color:var(--text2)">点击节点查看详情</div>
+      <h4 style="margin-top:14px">🔗 关联边</h4>
+      <div id="kg-detail-edges"></div>
+      <h4 style="margin-top:14px">🎨 图例</h4>
+      <div id="kg-node-legend"></div>
+      <h4 style="margin-top:10px">🔗 关系图例</h4>
+      <div id="kg-edge-legend" class="edge-legend"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 轨迹 -->
+<div id="panel-trajectory" class="panel">
+  <div class="controls">
+    <label>地图 <select id="traj-map"></select></label>
+    <label>场景 <select id="traj-scenario"></select></label>
+    <button class="primary" onclick="loadTrajectory()">加载</button>
+    <button onclick="togglePlay()" id="btn-play">▶ 播放</button>
+    <span id="traj-info" style="color:var(--text2);font-size:12px"></span>
+  </div>
+  <div class="slider-row">
+    <span class="frame-label" id="frame-label">Frame 0/0</span>
+    <input type="range" id="frame-slider" min="0" max="0" value="0" oninput="seekFrame(this.value)">
+  </div>
+  <canvas id="traj-canvas" class="spatial-canvas" width="900" height="600"></canvas>
+</div>
+
+<!-- 对比 -->
+<div id="panel-comparison" class="panel">
+  <div class="controls">
+    <label>指标 <select id="cmp-metric" onchange="updateComparison()">
+      <option value="nodes">节点数</option><option value="edges">边数</option><option value="time">耗时(s)</option>
+    </select></label>
+  </div>
+  <div class="chart-box" style="min-height:500px"><div id="chart-comparison"></div></div>
+</div>
+
+<script>
+let DATA=null, kgGraph=null, kgSim=null, kgSvg=null, kgG=null;
+let nodeTypeFilter=new Set(), edgeTypeFilter=new Set(), searchQuery='';
+let trajData=null,trajPlaying=false,trajFrame=0,trajTimer=null;
+
+const TYPE_COLORS={Vehicle:'#3b82f6',TrafficLight:'#ef4444',RoadElement:'#6b7280',EnvironmentSnapshot:'#22c55e',Maneuver:'#f59e0b',InteractionEvent:'#8b5cf6',
+  Vehicle:'#3b82f6',Pedestrian:'#eab308',ego_vehicle:'#ef4444'};
+const EDGE_COLORS={in_lane:'#60a5fa',approaching:'#f87171',containsVehicle:'#a78bfa',containsTrafficLight:'#fb923c',containsRoad:'#9ca3af',
+  hasEnvironment:'#4ade80',weather_context:'#86efac',lane_connects:'#93c5fd',adjacent_lane:'#bfdbfe',has_maneuver:'#fcd34d',
+  has_interaction:'#c084fc',actor:'#e879f9',dst:'#f472b6',src:'#fb7185',standing_still:'#d1d5db',following:'#6ee7b7',
+  manifestsAs:'#fbbf24',in_junction:'#c4b5fd'};
+
+fetch('viz_data.json').then(r=>r.json()).then(d=>{DATA=d;init()});
+
+function init(){renderSummary();renderCharts();populateSelectors();renderHeatmaps();renderComparison()}
+
+function switchTab(id){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('panel-'+id).classList.add('active');
+  event.target.classList.add('active');
+  if(id==='kg'&&!kgGraph)loadKG();
+  if(id==='trajectory'&&!trajData)loadTrajectory();
+}
+
+// ── 总览 ──
+function renderSummary(){
+  const s=DATA.summary;
+  const tn=DATA.results.reduce((a,r)=>a+(r.nodes||0),0);
+  const te=DATA.results.reduce((a,r)=>a+(r.edges||0),0);
+  const tt=DATA.results.reduce((a,r)=>a+(r.time||0),0);
+  document.getElementById('summary-cards').innerHTML=
+    `<div class="card"><div class="label">采集任务</div><div class="value" style="color:var(--accent)">${s.total}</div><div class="sub">${s.passed}/${s.total} 通过</div></div>
+     <div class="card"><div class="label">总节点数</div><div class="value" style="color:var(--green)">${tn.toLocaleString()}</div><div class="sub">平均 ${Math.round(tn/s.total)}/场景</div></div>
+     <div class="card"><div class="label">总边数</div><div class="value" style="color:var(--blue)">${te.toLocaleString()}</div><div class="sub">平均 ${Math.round(te/s.total).toLocaleString()}/场景</div></div>
+     <div class="card"><div class="label">总耗时</div><div class="value" style="color:var(--yellow)">${Math.round(tt/60)}m</div><div class="sub">平均 ${(tt/s.total).toFixed(1)}s/任务</div></div>
+     <div class="card"><div class="label">地图数</div><div class="value">${s.maps.length}</div><div class="sub">${s.maps.join(', ')}</div></div>
+     <div class="card"><div class="label">场景数</div><div class="value">${s.scenarios.length}</div><div class="sub">A基线 B风险 C复杂 D环境</div></div>`;
+}
+
+function renderCharts(){
+  const s=DATA.summary,maps=s.maps,scs=s.scenarios;
+  Plotly.newPlot('chart-map-stats',[
+    {x:maps,y:maps.map(m=>s.by_map[m].nodes),name:'节点',type:'bar',marker:{color:'#6366f1'}},
+    {x:maps,y:maps.map(m=>s.by_map[m].edges),name:'边',type:'bar',marker:{color:'#3b82f6'},yaxis:'y2'},
+  ],{margin:{t:10,b:40,l:50,r:50},paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{color:'#8b8fa3'},legend:{x:0,y:1.15,orientation:'h'},yaxis:{title:'节点',gridcolor:'#2a2d3a'},yaxis2:{title:'边',overlaying:'y',side:'right',gridcolor:'#2a2d3a'}},{responsive:true});
+  const tierColors=scs.map(s2=>({A:'#22c55e',B:'#eab308',C:'#f97316',D:'#ef4444'}[s.by_scenario[s2].tier]));
+  Plotly.newPlot('chart-scenario-stats',[{x:scs,y:scs.map(s2=>s.by_scenario[s2].nodes),type:'bar',marker:{color:tierColors},text:scs.map(s2=>s.by_scenario[s2].tier),textposition:'outside'}],{margin:{t:20,b:60,l:50,r:20},paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{color:'#8b8fa3'},yaxis:{title:'平均节点数',gridcolor:'#2a2d3a'}},{responsive:true});
+  Plotly.newPlot('chart-time-dist',[{x:DATA.results.map(r=>r.time),type:'histogram',marker:{color:'#6366f1',line:{color:'#818cf8',width:1}},xbins:{start:10,end:90,size:5}}],{margin:{t:10,b:50,l:50,r:20},paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{color:'#8b8fa3'},xaxis:{title:'耗时(s)',gridcolor:'#2a2d3a'},yaxis:{title:'任务数',gridcolor:'#2a2d3a'}},{responsive:true});
+  const tiers=['A','B','C','D'],tc=tiers.map(t=>scs.filter(s2=>s.by_scenario[s2].tier===t).length*5);
+  Plotly.newPlot('chart-tier-pie',[{values:tc,labels:['A 基线','B 风险','C 复杂','D 环境'],type:'pie',marker:{colors:['#22c55e','#eab308','#f97316','#ef4444']},textinfo:'label+value',textfont:{color:'#fff'}}],{margin:{t:10,b:10,l:10,r:10},paper_bgcolor:'transparent',font:{color:'#8b8fa3'},showlegend:false},{responsive:true});
+}
+
+function renderHeatmaps(){
+  const s=DATA.summary,maps=s.maps,scs=s.scenarios;
+  const mkH=(id,fn,label)=>{const z=maps.map(m=>scs.map(sc=>{const r=DATA.results.find(r2=>r2.map===m&&r2.scenario===sc);return r?fn(r):0}));
+    Plotly.newPlot(id,[{z,x:scs,y:maps,type:'heatmap',colorscale:[[0,'#1a1d27'],[.25,'#312e81'],[.5,'#6366f1'],[.75,'#a78bfa'],[1,'#c4b5fd']],text:z.map(row=>row.map(v=>v.toLocaleString())),texttemplate:'%{text}',hovertemplate:'%{y}+%{x}: %{z} '+label+'<extra></extra>'}],{margin:{t:10,b:50,l:80,r:20},paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{color:'#8b8fa3'}},{responsive:true});
+  };
+  mkH('heatmap-nodes',r=>r.nodes,'节点');mkH('heatmap-edges',r=>r.edges,'边');
+}
+
+function populateSelectors(){
+  const maps=DATA.summary.maps,scs=DATA.summary.scenarios;
+  ['kg-map','traj-map'].forEach(id=>{const s=document.getElementById(id);maps.forEach(m=>{const o=document.createElement('option');o.value=m;o.textContent=m;s.appendChild(o)})});
+  ['kg-scenario','traj-scenario'].forEach(id=>{const s=document.getElementById(id);scs.forEach(sc=>{const o=document.createElement('option');o.value=sc;o.textContent=sc;s.appendChild(o)})});
+}
+
+// ══════════════════════════════════════════════════════
+//  知识图谱 — 带标签、关系类型、子图查询
+// ══════════════════════════════════════════════════════
+
+function getNodeLabel(n){
+  const a=n.attrs||{};
+  switch(n.type){
+    case 'Vehicle': return a.is_ego?'🚗 EGO':'🚗 '+(a.vehicle_type||'').split('.').pop();
+    case 'TrafficLight': return '🚦 '+((a.state||'').replace('TrafficLightState.',''));
+    case 'RoadElement': return '🛣️ road_'+a.road_id+'_L'+a.lane_id;
+    case 'EnvironmentSnapshot': return '🌤️ frame_'+a.frame_id;
+    case 'Maneuver': return '🎯 '+(a.labels||[]).join(',');
+    case 'InteractionEvent': return '⚡ '+(a.labels||[]).join(',');
+    default: return n.type+': '+n.id;
+  }
+}
+
+function getNodeRadius(n){
+  switch(n.type){
+    case 'Vehicle':return 10;case 'TrafficLight':return 7;case 'RoadElement':return 4;
+    case 'EnvironmentSnapshot':return 3;case 'Maneuver':return 8;case 'InteractionEvent':return 8;
+    default:return 5;
+  }
+}
+
+function loadKG(){
+  const map=document.getElementById('kg-map').value;
+  const sc=document.getElementById('kg-scenario').value;
+  const key=map+'/'+sc;
+  const sd=DATA.scenarios[key];
+  if(!sd||!sd.graph){document.getElementById('kg-info').textContent='无数据';return}
+  kgGraph=sd.graph;
+  const nodes=kgGraph.nodes, edges=kgGraph.edges;
+
+  // Collect types
+  const nTypes=new Set(nodes.map(n=>n.type));
+  const eTypes=new Set(edges.map(e=>e.type));
+
+  // Init filters (all selected)
+  nodeTypeFilter=new Set(nTypes);
+  edgeTypeFilter=new Set(eTypes);
+  searchQuery='';
+
+  // Build filter UI
+  const nf=document.getElementById('kg-type-filters');
+  nf.innerHTML=[...nTypes].map(t=>{
+    const cnt=nodes.filter(n=>n.type===t).length;
+    const color=TYPE_COLORS[t]||'#6b7280';
+    return `<label><input type="checkbox" checked data-type="${t}" onchange="toggleNodeType(this)"><span class="node-badge" style="background:${color};color:#fff">${t}</span> <span class="stat">(${cnt})</span></label>`;
+  }).join('');
+
+  const ef=document.getElementById('kg-edge-filters');
+  ef.innerHTML=[...eTypes].map(t=>{
+    const cnt=edges.filter(e=>e.type===t).length;
+    const color=EDGE_COLORS[t]||'#4b5563';
+    return `<label><input type="checkbox" checked data-etype="${t}" onchange="toggleEdgeType(this)"><span class="edge-type" style="background:${color};color:#fff">${t}</span> <span class="stat">(${cnt})</span></label>`;
+  }).join('');
+
+  // Legends
+  document.getElementById('kg-node-legend').innerHTML=[...nTypes].map(t=>
+    `<div style="display:flex;align-items:center;gap:5px;margin:2px 0"><span style="width:10px;height:10px;border-radius:50%;background:${TYPE_COLORS[t]||'#6b7280'};display:inline-block"></span><span style="font-size:11px;color:var(--text2)">${t}</span></div>`
+  ).join('');
+  document.getElementById('kg-edge-legend').innerHTML=[...eTypes].map(t=>
+    `<div class="edge-legend-item"><span class="edge-legend-line" style="background:${EDGE_COLORS[t]||'#4b5563'}"></span>${t}</div>`
+  ).join('');
+
+  renderKGGraph();
+}
+
+function toggleNodeType(cb){cb.checked?nodeTypeFilter.add(cb.dataset.type):nodeTypeFilter.delete(cb.dataset.type);filterKG()}
+function toggleEdgeType(cb){cb.checked?edgeTypeFilter.add(cb.dataset.etype):edgeTypeFilter.delete(cb.dataset.etype);filterKG()}
+function selectAllTypes(){document.querySelectorAll('#kg-type-filters input,#kg-edge-filters input').forEach(cb=>{cb.checked=true});nodeTypeFilter=new Set(kgGraph.nodes.map(n=>n.type));edgeTypeFilter=new Set(kgGraph.edges.map(e=>e.type));filterKG()}
+function selectNoTypes(){document.querySelectorAll('#kg-type-filters input,#kg-edge-filters input').forEach(cb=>{cb.checked=false});nodeTypeFilter.clear();edgeTypeFilter.clear();filterKG()}
+
+function filterKG(){
+  searchQuery=(document.getElementById('kg-search').value||'').toLowerCase();
+  renderKGGraph();
+}
+
+function getVisibleNodes(){
+  return kgGraph.nodes.filter(n=>{
+    if(!nodeTypeFilter.has(n.type))return false;
+    if(searchQuery){
+      const label=getNodeLabel(n).toLowerCase();
+      if(!label.includes(searchQuery)&&!n.id.toLowerCase().includes(searchQuery))return false;
+    }
+    return true;
+  });
+}
+
+function renderKGGraph(){
+  const container=document.getElementById('kg-viz');
+  container.innerHTML='';
+  const W=container.clientWidth,H=container.clientHeight;
+
+  const svg=d3.select(container).append('svg').attr('width',W).attr('height',H);
+  kgSvg=svg;
+  const g=svg.append('g');
+  kgG=g;
+  svg.call(d3.zoom().scaleExtent([.05,10]).on('zoom',e=>g.attr('transform',e.transform)));
+
+  // Background grid
+  const gridG=g.append('g').attr('class','grid');
+  for(let x=-2000;x<2000;x+=100)gridG.append('line').attr('x1',x).attr('y1',-2000).attr('x2',x).attr('y2',2000).attr('stroke','#1a1d27').attr('stroke-width',.5);
+  for(let y=-2000;y<2000;y+=100)gridG.append('line').attr('x1',-2000).attr('y1',y).attr('x2',2000).attr('y2',y).attr('stroke','#1a1d27').attr('stroke-width',.5);
+
+  // Filter data
+  const visNodes=getVisibleNodes();
+  const visIds=new Set(visNodes.map(n=>n.id));
+  const visEdges=kgGraph.edges.filter(e=>visIds.has(e.src_id)&&visIds.has(e.dst_id)&&edgeTypeFilter.has(e.type));
+
+  // Stats
+  document.getElementById('kg-subgraph-stats').innerHTML=`可见节点: <b>${visNodes.length}</b><br>可见边: <b>${visEdges.length}</b><br>过滤: ${kgGraph.nodes.length-visNodes.length} 节点, ${kgGraph.edges.length-visEdges.length} 边隐藏`;
+  document.getElementById('kg-info').textContent=`节点: ${visNodes.length}/${kgGraph.nodes.length} | 边: ${visEdges.length}/${kgGraph.edges.length}`;
+
+  // Prepare simulation data
+  const simNodes=visNodes.map(n=>({...n,x:(n.attrs?.location_x||0)*3+W/2,y:-(n.attrs?.location_y||0)*3+H/2}));
+  const nodeMap={};simNodes.forEach(n=>{nodeMap[n.id]=n});
+  const simEdges=visEdges.filter(e=>nodeMap[e.src_id]&&nodeMap[e.dst_id]).map(e=>({...e,source:e.src_id,target:e.dst_id}));
+
+  // Arrow markers for each edge type
+  const defs=svg.append('defs');
+  [...new Set(simEdges.map(e=>e.type))].forEach(t=>{
+    const color=EDGE_COLORS[t]||'#4b5563';
+    defs.append('marker').attr('id','arrow-'+t).attr('viewBox','0 -4 8 8').attr('refX',20).attr('refY',0)
+      .attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto')
+      .append('path').attr('d','M0,-3L8,0L0,3').attr('fill',color).attr('opacity',.7);
+  });
+
+  // Edges
+  const link=g.append('g').selectAll('line').data(simEdges).join('line')
+    .attr('stroke',d=>EDGE_COLORS[d.type]||'#4b5563').attr('stroke-width',d=>d.type==='in_lane'||d.type==='containsVehicle'?1.5:1)
+    .attr('stroke-opacity',.45).attr('marker-end',d=>'url(#arrow-'+d.type+')');
+
+  // Edge labels
+  const edgeLabel=g.append('g').selectAll('text').data(simEdges).join('text')
+    .attr('font-size',7).attr('fill',d=>EDGE_COLORS[d.type]||'#4b5563').attr('text-anchor','middle').attr('dy',-3)
+    .attr('opacity',.7).text(d=>d.type);
+
+  // Nodes
+  const node=g.append('g').selectAll('g').data(simNodes).join('g')
+    .call(d3.drag().on('start',(e,d)=>{if(!e.active)kgSim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y})
+      .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y}).on('end',(e,d)=>{if(!e.active)kgSim.alphaTarget(0);d.fx=null;d.fy=null}));
+
+  // Node circles
+  node.append('circle')
+    .attr('r',d=>getNodeRadius(d))
+    .attr('fill',d=>TYPE_COLORS[d.type]||'#6b7280')
+    .attr('stroke',d=>d.type==='Vehicle'&&d.attrs?.is_ego?'#fbbf24':'#0f1117')
+    .attr('stroke-width',d=>d.type==='Vehicle'&&d.attrs?.is_ego?3:1.5)
+    .style('cursor','pointer')
+    .on('click',(e,d)=>showNodeDetail(d,visEdges))
+    .on('mouseover',function(e,d){
+      d3.select(this).transition().duration(150).attr('r',getNodeRadius(d)*1.5);
+      // Highlight connected edges
+      link.attr('stroke-opacity',l=>(l.src_id===d.id||l.dst_id===d.id)?.9:.1);
+      link.attr('stroke-width',l=>(l.src_id===d.id||l.dst_id===d.id)?3:.5);
+      edgeLabel.attr('opacity',l=>(l.src_id===d.id||l.dst_id===d.id)?1:.05);
+      node.attr('opacity',n2=>{
+        if(n2.id===d.id)return 1;
+        if(visEdges.some(e=>(e.src_id===d.id&&e.dst_id===n2.id)||(e.dst_id===d.id&&e.src_id===n2.id)))return 1;
+        return .15;
+      });
+    })
+    .on('mouseout',function(e,d){
+      d3.select(this).transition().duration(150).attr('r',getNodeRadius(d));
+      link.attr('stroke-opacity',.45).attr('stroke-width',l=>l.type==='in_lane'||l.type==='containsVehicle'?1.5:1);
+      edgeLabel.attr('opacity',.7);
+      node.attr('opacity',1);
+    });
+
+  // Node labels (always visible)
+  node.append('text')
+    .attr('dy',d=>-getNodeRadius(d)-4).attr('text-anchor','middle')
+    .attr('font-size',8).attr('font-weight',600).attr('fill','#e0e0e0')
+    .attr('paint-order','stroke').attr('stroke','#0f1117').attr('stroke-width',2.5)
+    .text(d=>getNodeLabel(d));
+
+  // Force simulation
+  kgSim=d3.forceSimulation(simNodes)
+    .force('link',d3.forceLink(simEdges).id(d=>d.id).distance(80).strength(.2))
+    .force('charge',d3.forceManyBody().strength(d=>d.type==='RoadElement'?-20:-80))
+    .force('center',d3.forceCenter(W/2,H/2))
+    .force('collision',d3.forceCollide(d=>getNodeRadius(d)+8))
+    .force('x',d3.forceX(W/2).strength(.03))
+    .force('y',d3.forceY(H/2).strength(.03));
+
+  kgSim.on('tick',()=>{
+    link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+    edgeLabel.attr('x',d=>(d.source.x+d.target.x)/2).attr('y',d=>(d.source.y+d.target.y)/2);
+    node.attr('transform',d=>`translate(${d.x},${d.y})`);
+  });
+}
+
+function showNodeDetail(n,edges){
+  const a=n.attrs||{};
+  const detail=document.getElementById('kg-detail-content');
+  let html=`<div style="margin-bottom:8px"><span class="node-badge" style="background:${TYPE_COLORS[n.type]||'#6b7280'};color:#fff;font-size:12px">${n.type}</span></div>`;
+  html+=`<div class="prop"><span class="k">ID</span><span class="v">${n.id}</span></div>`;
+  html+=`<div class="prop"><span class="k">首帧</span><span class="v">${n.first_frame}</span></div>`;
+  html+=`<div class="prop"><span class="k">末帧</span><span class="v">${n.last_frame}</span></div>`;
+
+  const skip=new Set(['entity_id','entity_type','first_frame','last_frame']);
+  for(const[k,v]of Object.entries(a)){
+    if(skip.has(k)||v===null||v===undefined)continue;
+    const vs=typeof v==='number'?v.toFixed?.(2)??v:typeof v==='boolean'?v:String(v);
+    html+=`<div class="prop"><span class="k">${k}</span><span class="v" title="${vs}">${vs}</span></div>`;
+  }
+  detail.innerHTML=html;
+
+  // Connected edges
+  const connected=edges.filter(e=>e.src_id===n.id||e.dst_id===n.id);
+  const edgeDiv=document.getElementById('kg-detail-edges');
+  if(connected.length===0){edgeDiv.innerHTML='<div style="color:var(--text2)">无关联边</div>';return}
+  const grouped={};
+  connected.forEach(e=>{if(!grouped[e.type])grouped[e.type]=[];grouped[e.type].push(e)});
+  edgeDiv.innerHTML=Object.entries(grouped).map(([t,es])=>{
+    const color=EDGE_COLORS[t]||'#4b5563';
+    return es.slice(0,8).map(e=>{
+      const other=e.src_id===n.id?e.dst_id:e.src_id;
+      const dir=e.src_id===n.id?'→':'←';
+      return `<div class="edge-item"><span class="edge-type" style="background:${color};color:#fff">${t}</span>${dir} <b>${other}</b></div>`;
+    }).join('')+(es.length>8?`<div class="stat">...还有 ${es.length-8} 条</div>`:'');
+  }).join('');
+}
+
+function resetKGView(){if(kgSvg)kgSvg.call(d3.zoom().transform,d3.zoomIdentity)}
+
+function exportKG(){
+  const visNodes=getVisibleNodes();
+  const visIds=new Set(visNodes.map(n=>n.id));
+  const visEdges=kgGraph.edges.filter(e=>visIds.has(e.src_id)&&visIds.has(e.dst_id)&&edgeTypeFilter.has(e.type));
+  const sub={nodes:visNodes,edges:visEdges};
+  const blob=new Blob([JSON.stringify(sub,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  const map=document.getElementById('kg-map').value,sc=document.getElementById('kg-scenario').value;
+  a.download=`kg_${map}_${sc}_subgraph.json`;a.click();
+}
+
+// ── 轨迹 ──
+function loadTrajectory(){
+  const map=document.getElementById('traj-map').value,sc=document.getElementById('traj-scenario').value;
+  const sd=DATA.scenarios[map+'/'+sc];
+  if(!sd||!sd.trajectories){document.getElementById('traj-info').textContent='无数据';return}
+  trajData=sd.trajectories;
+  const ids=Object.keys(trajData);
+  const maxF=Math.max(...ids.flatMap(id=>trajData[id].map(p=>p.f)));
+  document.getElementById('frame-slider').max=maxF;
+  document.getElementById('traj-info').textContent=`${ids.length} 实体, ${maxF+1} 帧`;
+  trajFrame=0;drawFrame(0);
+}
+function drawFrame(f){
+  trajFrame=f;document.getElementById('frame-label').textContent=`Frame ${f}`;document.getElementById('frame-slider').value=f;
+  const canvas=document.getElementById('traj-canvas'),ctx=canvas.getContext('2d'),W=canvas.width,H=canvas.height;
+  ctx.fillStyle='#0f1117';ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='#1a1d27';ctx.lineWidth=1;
+  for(let i=0;i<W;i+=40){ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i,H);ctx.stroke()}
+  for(let i=0;i<H;i+=40){ctx.beginPath();ctx.moveTo(0,i);ctx.lineTo(W,i);ctx.stroke()}
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  const ids=Object.keys(trajData);
+  ids.forEach(id=>{trajData[id].forEach(p=>{if(p.x<minX)minX=p.x;if(p.x>maxX)maxX=p.x;if(p.y<minY)minY=p.y;if(p.y>maxY)maxY=p.y})});
+  const rangeX=maxX-minX||1,rangeY=maxY-minY||1;
+  const scale=Math.min((W-60)/rangeX,(H-60)/rangeY)*.9;
+  const offX=W/2-(minX+maxX)/2*scale,offY=H/2+(minY+maxY)/2*scale;
+  const toS=(x,y)=>[x*scale+offX,-y*scale+offY];
+  ids.forEach(id=>{const pts=trajData[id].filter(p=>p.f<=f);if(pts.length<2)return;
+    ctx.beginPath();ctx.strokeStyle=id.length<5?'rgba(59,130,246,.3)':'rgba(234,179,8,.3)';ctx.lineWidth=1;
+    pts.forEach((p,i)=>{const[sx,sy]=toS(p.x,p.y);i===0?ctx.moveTo(sx,sy):ctx.lineTo(sx,sy)});ctx.stroke()});
+  ids.forEach(id=>{const pts=trajData[id];const p=pts.find(p2=>p2.f===f)||pts.find(p2=>p2.f<=f);if(!p)return;
+    const[sx,sy]=toS(p.x,p.y);const isVeh=id.length<5;ctx.beginPath();ctx.fillStyle=isVeh?'#3b82f6':'#eab308';ctx.arc(sx,sy,isVeh?6:4,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#e0e0e0';ctx.font='10px sans-serif';ctx.fillText(id,sx+8,sy-6)});
+  ctx.fillStyle='#1a1d27';ctx.fillRect(0,H-28,W,28);ctx.fillStyle='#8b8fa3';ctx.font='12px sans-serif';
+  const fd=ids.map(id=>trajData[id].find(p=>p.f===f)).filter(Boolean);
+  const avgSpd=fd.length?(fd.reduce((a,p)=>a+p.s,0)/fd.length).toFixed(1):0;
+  ctx.fillText(`Frame: ${f} | Entities: ${fd.length} | Avg Speed: ${avgSpd} m/s`,12,H-10);
+}
+function seekFrame(v){drawFrame(parseInt(v))}
+function togglePlay(){trajPlaying=!trajPlaying;document.getElementById('btn-play').textContent=trajPlaying?'⏸ 暂停':'▶ 播放';
+  if(trajPlaying){const maxF=parseInt(document.getElementById('frame-slider').max);trajTimer=setInterval(()=>{trajFrame=(trajFrame+1)%(maxF+1);drawFrame(trajFrame)},100)}else clearInterval(trajTimer)}
+
+// ── 对比 ──
+function renderComparison(){updateComparison()}
+function updateComparison(){
+  const metric=document.getElementById('cmp-metric').value,s=DATA.summary,maps=s.maps,scs=s.scenarios;
+  const traces=maps.map((m,i)=>({x:scs,y:scs.map(sc=>{const r=DATA.results.find(r2=>r2.map===m&&r2.scenario===sc);return r?r[metric]:0}),name:m,type:'scatter',mode:'lines+markers',line:{width:2},marker:{size:6}}));
+  Plotly.newPlot('chart-comparison',traces,{margin:{t:20,b:50,l:60,r:20},paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{color:'#8b8fa3'},xaxis:{gridcolor:'#2a2d3a'},yaxis:{title:{nodes:'节点数',edges:'边数',time:'耗时(s)'}[metric],gridcolor:'#2a2d3a'},legend:{x:0,y:1.12,orientation:'h'},hovermode:'x unified'},{responsive:true});
+}
+</script>
+</body>
+</html>
