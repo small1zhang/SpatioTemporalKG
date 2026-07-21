@@ -359,6 +359,21 @@ def main():
             time.sleep(1)
         world = client.get_world()
         print(f"[+] Loaded map: {world.get_map().name}")
+    else:
+        # 地图已匹配, 但需清理旧 actors, 否则 spawn 阶段操作已销毁的 actor 会 crash
+        print(f"[*] Cleaning up existing actors on {current_map} ...")
+        to_kill = []
+        for a in world.get_actors():
+            try:
+                if a.type_id.startswith("vehicle.") or a.type_id.startswith("walker."):
+                    to_kill.append(a)
+            except Exception:
+                pass
+        for a in to_kill:
+            try: a.destroy()
+            except Exception: pass
+        print(f"[+] destroyed {len(to_kill)} actors")
+        time.sleep(2)  # 等异步销毁
 
     # 同步模式
     settings = world.get_settings()
