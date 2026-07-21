@@ -33,3 +33,35 @@ class IncrementalEngine:
     def reset(self):
         self._prev_frame = None
         self._delta_history.clear()
+
+    # ---------------- 序列化 (用于 checkpoint) ----------------
+
+    def to_dict(self) -> dict:
+        """导出增量引擎状态, 用于 checkpoint 持久化.
+
+        序列化内容:
+          - _prev_frame: 最新一帧的 dict (可 JSON 序列化)
+          - delta_history 的统计摘要 (全量 list 过大, 不落盘)
+        """
+        # _prev_frame 中可能含不可 JSON 序列化的字段, 做清理
+        import json
+        prev = self._prev_frame
+        if prev is not None:
+            try:
+                json.dumps(prev, default=str)
+            except (TypeError, ValueError):
+                prev = None  # 不可序列化则丢弃 (极少出现)
+        return {
+            "prev_frame": prev,
+            "n_deltas": len(self._delta_history),
+            "last_processed_frame": prev.get("frame_id", -1) if isinstance(prev, dict) else -1,
+        }
+
+    def load_dict(self, data: dict) -> None:
+        """从 to_dict() 恢复引擎状态."""
+        self._prev_frame = data.get("prev_frame", None)
+        if self._prev_frame is not None:
+            # 确保 frame_id 正确
+            pass
+        # delta_history 不恢复 (仅做统计), 从 checkpoint 恢复后视为无历史增量
+        self._delta_history.clear()

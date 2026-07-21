@@ -1,0 +1,560 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+pipeline.py — 跨分块编排 Phase2→3→4→5 (长期连续采集方案 §五)
+
+用法:
+    python scripts/long_run/pipeline.py --run-dir data/long_run/Town10HD_xxx/run_20260720_120000_24000f
+
+设计要点:
+  • 复用现有 stk/scenario, stk/behavior, stk/rules, stk/dynamic, stk/storage 模块,
+    不修改这些模块内部代码 (仅循环调用). 唯一需要改造的是实例化对象跨分块复用,
+    确保状态不因分块边界被重置.
+  • IncrementalEngine 和 BehaviorRelationGenerator 实例在分块循环外部创建,
+    每个 chunk 继续推进, 不清空内部状态.
+  • Phase2 的 waypoint 采集 (static lanes / lane topology) 只需做一次, 跨分块共用.
+  • 最终统一写入同一个 Neo4j 图 (同一批 actor.id 对应同一批节点, 持续更新属性).
+  • 若无法连接 Neo4j, 输出 phase5_graph.json (KG 全图 JSON), 与现有异常单场景兼容.
+"""
+from __future__ import annotations
+import argparse
+import json
+import math
+import os
+import sys
+import time
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+_REPO = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_REPO))
+
+
+def banner(label):
+    print("\n" + "=" * 60)
+    print(f"  {label}")
+    print("=" * 60)
+
+
+def load_chunks(run_dir: Path) -> List[Path]:
+    """加载 run_dir 下的所有 chunk_*.json, 按帧号排序返回.
+
+    同时支持新格式(light): {'vehicles':[...], 'pedestrians':[...], ...} 的 "已提取" 数据,
+    和 run_phases_1_5.py 输出的 phase1_extraction.json 原始格式.
+
+    这里假定 collect.py 产出的 chunk 文件是原始格式:
+      [{"frame_id": i, "elapsed_seconds": i*tick_s,
+        "actors": [...], "traffic_lights": [...], "weather": {...},
+        "waypoints": [...], "events": [...]}, ...]
+    """
+    chunks = sorted(run_dir.glob("chunk_*.json"))
+    if not chunks:
+        # 也支持单文件
+        fallback = run_dir / "phase1_extraction.json"
+        if fallback.exists():
+            chunks = [fallback]
+    return chunks
+
+
+def extract_static_lanes(chunks: List[Path]) -> dict:
+    """从所有 chunk 的 waypoints 汇总静态车道 + 拓扑, 跨分块共用."""
+    from stk.extraction.waypoint_extractor import extract_waypoints, build_lane_topology
+
+    all_wps = []
+    for cf in chunks[:3]:  # 前 3 个 chunk 够收集路网
+        with open(cf) as f:
+            data = json.load(f)
+        for frame in data[:5]:
+            for wp in frame.get("waypoints", []):
+                all_wps.append(wp)
+    # dedup by (road_id, lane_id)
+    seen = set()
+    unique_wps = []
+    for wp in all_wps:
+        key = (wp.get("road_id"), wp.get("lane_id"))
+        if key not in seen:
+            seen.add(key)
+            unique_wps.append(wp)
+
+    lanes = extract_waypoints(unique_wps)
+    topo = build_lane_topology(unique_wps)
+    return {"lanes": lanes, "topo": topo}
+
+
+def process_chunks(
+    chunks: List[Path],
+    static: dict,
+    tick_s: float = 0.05,
+    map_name: str = "Town10HD",
+    seed: int = 42,
+    neo4j_config: Optional[Dict[str, Any]] = None,
+    out_dir: Path = None,
+    checkpoint_path: Optional[Path] = None,
+):
+    """跨分块执行 Phase2→3→4→5.
+
+    Args:
+        chunks: 按帧顺序排列的 chunk 文件路径列表
+        static: extract_static_lanes() 的结果 (lanes + topo)
+        tick_s: 帧间隔 (秒)
+        map_name: 地图名
+        seed: 随机种子 (用于 traffic_density 等)
+        neo4j_config: {host, port, user, password}, None=只输出 JSON
+        out_dir: phase5 输出目录
+        checkpoint_path: pipeline checkpoint 路径 (若有则从中恢复, 也定期写入)
+
+    核心设计:
+      → Phase1 已由 collect.py 完成.
+      → Phase2-5 在 chunk 循环外部建立状态, 跨 chunk 不停.
+        - BehaviorRelationGenerator (含防抖) 持续
+        - IncrementalEngine (delta) 持续
+      → 输出: phase5_graph.json (完整图) + 写入 Neo4j (若配置)
+      → checkpoint 支持: 每个 chunk 处理完写一次 pipeline_checkpoint.json,
+        下次重启时跨 chunk 累积容器 + 引擎状态全部恢复.
+    """
+    from stk.extraction.actor_extractor import extract_all_actors
+    from stk.extraction.trafficlight_extractor import extract_all_traffic_lights
+    from stk.extraction.weather_extractor import build_environment_snapshot
+    from stk.scenario.snapshot_builder import FrameData, build_snapshot
+    from stk.scenario.spatial import (
+        compute_in_lane, compute_ahead_of, compute_beside,
+        compute_nearby_pedestrian, compute_in_junction,
+    )
+    from stk.behavior.generator import BehaviorRelationGenerator
+    from stk.rules.generator import RuleEnforcer
+    from stk.dynamic.incremental_updater import IncrementalEngine
+    from stk.storage.serializer import serialize_graph
+
+    # ---- Phase 3-5 跨 chunk 状态 ----
+    beh_gen = BehaviorRelationGenerator()
+    rule_enf = RuleEnforcer()
+    engine = IncrementalEngine()
+
+    lanes = static["lanes"]
+    topo = static["topo"]
+
+    # 累积容器 (跨 chunk)
+    all_maneuvers_raw = []
+    all_interactions_raw = []
+    all_behavior_rels_raw = []
+    all_cross_layer_rels_raw = []
+    all_ruleouts_raw = []
+    all_phase2_frames = []  # 用于最终 serializer
+
+    total_frames = 0
+
+    # ---- Checkpoint 恢复 ----
+    start_chunk_idx = 0
+    if checkpoint_path and checkpoint_path.exists():
+        try:
+            with open(checkpoint_path) as f:
+                ckpt = json.load(f)
+            # 恢复引擎状态
+            if "beh_gen" in ckpt:
+                beh_gen.load_dict(ckpt["beh_gen"])
+            if "engine" in ckpt:
+                engine.load_dict(ckpt["engine"])
+            # 恢复累积容器 (重要: 跨 chunk 累积的 maneuvers/interactions/rels)
+            all_maneuvers_raw = ckpt.get("all_maneuvers_raw", [])
+            all_interactions_raw = ckpt.get("all_interactions_raw", [])
+            all_behavior_rels_raw = ckpt.get("all_behavior_rels_raw", [])
+            all_cross_layer_rels_raw = ckpt.get("all_cross_layer_rels_raw", [])
+            all_ruleouts_raw = ckpt.get("all_ruleouts_raw", [])
+            # all_phase2_frames 太大不持久化 (可重生成), 仅记录总帧数
+            total_frames = ckpt.get("total_frames", 0)
+            start_chunk_idx = ckpt.get("chunk_idx", 0) + 1  # 跳过已完成的
+            print(f"[+] RESUME from checkpoint: {checkpoint_path.name}")
+            print(f"    last chunk processed: {ckpt.get('chunk_idx')} -> start at chunk {start_chunk_idx+1}")
+            print(f"    total_frames so far: {total_frames}")
+            print(f"    beh_gen stats: {ckpt.get('beh_gen_stats', {})}")
+        except Exception as e:
+            print(f"[!] checkpoint load failed ({e}), starting from scratch")
+            start_chunk_idx = 0
+    elif checkpoint_path:
+        print(f"[*] no checkpoint at {checkpoint_path}, starting fresh")
+
+    # skip 已处理 chunk
+    chunks_to_process = chunks[start_chunk_idx:]
+    if start_chunk_idx > 0:
+        print(f"[+] skipping {start_chunk_idx} already-processed chunks; "
+              f"remaining: {len(chunks_to_process)}")
+
+    for chunk_offset, cf in enumerate(chunks_to_process):
+        chunk_idx = start_chunk_idx + chunk_offset  # 真实 chunk 编号
+        banner(f"Phase2-5: Processing chunk {chunk_idx+1}/{len(chunks)} ({cf.name})")
+        t0 = time.time()
+
+        with open(cf) as f:
+            chunk_data = json.load(f)
+
+        # 兼容两种输入格式: 原始 (run_phases_1_5.py / collect.py) 和 已提取字典
+        # 自动检测: 如果首 frame 有 "actors" 键, 即为原始; 否则假设为 {vehicles,pedestrians,...}
+        first_frame = chunk_data[0] if chunk_data else {}
+        needs_extraction = "actors" in first_frame or "waypoints" in first_frame
+
+        chunk_phase2 = []
+        chunk_maneuvers_raw = []
+        chunk_interactions_raw = []
+        chunk_behavior_rels_raw = []
+        chunk_cross_layer_rels_raw = []
+        chunk_ruleouts_raw = []
+
+        for raw in chunk_data:
+            fid = raw["frame_id"]
+
+            # Phase 2 转换 (若需要提取)
+            if needs_extraction:
+                actors = extract_all_actors(raw)
+                for av in actors.get("vehicles", []):
+                    src = next((a for a in raw["actors"]
+                                if str(a["id"]) == str(av.get("entity_id"))), None)
+                    if src and "lane_id" in src:
+                        av["lane_id"] = src["lane_id"]
+                        av["road_id"] = src.get("road_id", -1)
+                        av["current_lane_id"] = f"road_{src.get('road_id',0)}_lane_{src['lane_id']}"
+                tl = extract_all_traffic_lights(raw.get("traffic_lights", []))
+                weather = build_environment_snapshot(
+                    raw.get("weather", {}), fid,
+                    elapsed_seconds=raw.get("elapsed_seconds", 0.0),
+                    delta_seconds=tick_s, map_name=map_name,
+                    traffic_density=len(actors.get("vehicles", [])),
+                    random_seed=seed,
+                )
+                # 注: waypoints/lanes 重用 static 而非重新提取
+            else:
+                # 已是 phase2 格式 (兼容 batch 脚本)
+                actors = {"vehicles": raw.get("vehicles", []),
+                          "pedestrians": raw.get("pedestrians", [])}
+                tl = raw.get("traffic_lights", [])
+                weather = raw.get("weather", {})
+
+            # 空间关系 (每帧使用 static lanes)
+            from types import SimpleNamespace
+            vehs_raw = actors.get("vehicles", [])
+            peds_raw = actors.get("pedestrians", [])
+            vehs_adapted = []
+            for v in vehs_raw:
+                sn = SimpleNamespace(**v); sn.attrs = dict(v)
+                if not hasattr(sn, "entity_id") or sn.entity_id is None:
+                    sn.entity_id = str(v.get("entity_id", v.get("id", "")))
+                vehs_adapted.append(sn)
+            peds_adapted = []
+            for p in peds_raw:
+                sn = SimpleNamespace(**p); sn.attrs = dict(p)
+                if not hasattr(sn, "entity_id") or sn.entity_id is None:
+                    sn.entity_id = str(p.get("entity_id", p.get("id", "")))
+                peds_adapted.append(sn)
+
+            space_rels = []
+            try:
+                space_rels.extend(compute_in_lane(vehs_adapted, lanes, fid))
+                space_rels.extend(compute_ahead_of(vehs_adapted, fid))
+                space_rels.extend(compute_beside(vehs_adapted, fid))
+                space_rels.extend(compute_nearby_pedestrian(vehs_adapted, peds_adapted, fid))
+                space_rels.extend(compute_in_junction(vehs_adapted, fid, lanes))
+            except Exception as e:
+                print(f"  [!] spatial err f{fid}: {e}")
+
+            spatial_rels_dicts = []
+            for r in space_rels:
+                spatial_rels_dicts.append({
+                    "src_id": str(getattr(r, "src_id", "")),
+                    "dst_id": str(getattr(r, "dst_id", "")),
+                    "relation_type": getattr(r, "relation_type", ""),
+                    "frame_id": getattr(r, "frame_id", fid),
+                })
+            # T2.3 聚合关系
+            scene_id = f"scenario_frame_{fid}"
+            env_id = f"env_frame_{fid}"
+            tl_ids_seen = set()
+            for tl_dict in tl:
+                tl_eid = str(tl_dict.get("entity_id", ""))
+                if not tl_eid or tl_eid in tl_ids_seen:
+                    continue
+                tl_ids_seen.add(tl_eid)
+                spatial_rels_dicts.append({
+                    "src_id": scene_id, "dst_id": tl_eid,
+                    "relation_type": "containsTrafficLight", "frame_id": fid,
+                })
+            road_lane_seen = set()
+            for ln in lanes:
+                ln_id = str(ln.get("entity_id", ""))
+                if not ln_id or ln_id in road_lane_seen:
+                    continue
+                road_lane_seen.add(ln_id)
+                spatial_rels_dicts.append({
+                    "src_id": scene_id, "dst_id": ln_id,
+                    "relation_type": "containsRoad", "frame_id": fid,
+                })
+            spatial_rels_dicts.append({
+                "src_id": scene_id, "dst_id": env_id,
+                "relation_type": "hasEnvironment", "frame_id": fid,
+            })
+            spatial_rels_dicts.append({
+                "src_id": env_id, "dst_id": scene_id,
+                "relation_type": "weather_context", "frame_id": fid,
+            })
+            all_scene_rels = topo + spatial_rels_dicts
+
+            snap_dict = {
+                "frame_id": fid,
+                "elapsed_seconds": raw.get("elapsed_seconds", fid * tick_s),
+                "delta_seconds": tick_s,
+                "vehicles": actors.get("vehicles", []),
+                "pedestrians": actors.get("pedestrians", []),
+                "traffic_lights": tl,
+                "lanes": lanes,
+                "scene_rels": all_scene_rels,
+                "weather": weather,
+            }
+            chunk_phase2.append(snap_dict)
+
+            # Phase 3: 行为 + 规则
+            veh_str = [{**v, "entity_id": str(v.get("entity_id", v.get("id", "")))}
+                       for v in snap_dict["vehicles"]]
+            ped_str = [{**p, "entity_id": str(p.get("entity_id", p.get("id", "")))}
+                       for p in snap_dict.get("pedestrians", [])]
+            tl_str = [{**t, "entity_id": str(t.get("entity_id", t.get("id", "")))}
+                      for t in snap_dict.get("traffic_lights", [])]
+
+            beh_out = beh_gen.generate(
+                frame_id=fid, vehicles=veh_str, pedestrians=ped_str,
+                traffic_lights=tl_str, scene_relations=snap_dict.get("scene_rels", []),
+            )
+            chunk_maneuvers_raw.extend(beh_out.get("maneuvers", []))
+            chunk_interactions_raw.extend(beh_out.get("interactions", []))
+            chunk_behavior_rels_raw.extend(beh_out.get("behavior_rels", []))
+            chunk_cross_layer_rels_raw.extend(beh_out.get("cross_layer_rels", []))
+
+            rule_out = rule_enf.enforce(
+                frame_id=fid, vehicles=veh_str, pedestrians=ped_str,
+                traffic_lights=tl_str, scene_rels=snap_dict.get("scene_rels", []),
+            )
+            chunk_ruleouts_raw.append({
+                "frame_id": fid,
+                "violations": rule_out.get("violations", []),
+                "responsibilities": rule_out.get("responsibilities", []),
+            })
+
+            # Phase 4: 增量 (跨 chunk 复用 engine)
+            engine.process_frame(snap_dict)
+
+            total_frames += 1
+
+        # 累积 chunk 输出
+        all_phase2_frames.extend(chunk_phase2)
+        all_maneuvers_raw.extend(chunk_maneuvers_raw)
+        all_interactions_raw.extend(chunk_interactions_raw)
+        all_behavior_rels_raw.extend(chunk_behavior_rels_raw)
+        all_cross_layer_rels_raw.extend(chunk_cross_layer_rels_raw)
+        all_ruleouts_raw.extend(chunk_ruleouts_raw)
+
+        elapsed = time.time() - t0
+        print(f"  [chunk {chunk_idx+1}] {len(chunk_data)} frames, "
+              f"beh_rels={sum(len(s['scene_rels']) for s in chunk_phase2)}, "
+              f"time={elapsed:.1f}s")
+
+        # ---- 写 checkpoint (每 chunk 一次) ----
+        if checkpoint_path is not None:
+            try:
+                _write_pipeline_checkpoint(
+                    checkpoint_path, chunk_idx,
+                    beh_gen, engine,
+                    all_maneuvers_raw, all_interactions_raw,
+                    all_behavior_rels_raw, all_cross_layer_rels_raw,
+                    all_ruleouts_raw, total_frames,
+                )
+                print(f"    [ckpt] saved -> {checkpoint_path.name}")
+            except Exception as e:
+                print(f"    [!] checkpoint write failed: {e}")
+
+    # ---- Phase 5: 序列化 ----
+    # 注: 如果本次是 resume (start_chunk_idx > 0), 则 all_phase2_frames 仅包含
+    # 本次处理的 chunk 对应的帧, 序列化出来的图不完整. 因此 resume 完成后只更新
+    # checkpoint, 等用户跑完最后一轮 (无 --no-resume 且从头开始) 才输出最终图.
+    is_full_run = (start_chunk_idx == 0)
+    if not is_full_run:
+        print("\n[*] Resume run completed. Phase5 SKIPPED (partial frames).")
+        print(f"    To produce final graph, run again with --no-resume to process all chunks from scratch.")
+        # 仍然更新 checkpoint 中的累积容器大小, 供用户检查
+        return {
+            "is_full_run": False,
+            "total_frames_in_run": total_frames,
+            "chunks_processed": len(chunks_to_process),
+            "n_maneuvers_raw": len(all_maneuvers_raw),
+            "n_interactions_raw": len(all_interactions_raw),
+            "n_behavior_rels_raw": len(all_behavior_rels_raw),
+        }
+
+    banner("Phase 5: Storage & graph output")
+    t0 = time.time()
+
+    graph_obj = serialize_graph(
+        all_phase2_frames, with_relations=True,
+        maneuvers=all_maneuvers_raw,
+        interactions=all_interactions_raw,
+        behavior_rels=all_behavior_rels_raw,
+        cross_layer_rels=all_cross_layer_rels_raw,
+        rule_out=all_ruleouts_raw,
+    )
+    g_nodes = len(graph_obj.get("nodes", []))
+    g_edges = len(graph_obj.get("edges", []))
+    type_counts = Counter(n["type"] for n in graph_obj.get("nodes", []))
+    edge_type_counts = Counter(e["type"] for e in graph_obj.get("edges", []))
+
+    print(f"[+] serialize_graph: nodes={g_nodes} edges={g_edges}")
+    print(f"[+] node types: {dict(type_counts)}")
+    print(f"[+] edge types: {dict(edge_type_counts)}")
+
+    # 输出
+    if out_dir:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        graph_path = out_dir / "phase5_graph.json"
+        with open(graph_path, "w", encoding="utf-8") as f:
+            json.dump(graph_obj, f, ensure_ascii=False, indent=2, default=str)
+        sz = graph_path.stat().st_size / (1024 * 1024)
+        print(f"[+] graph saved: {graph_path} ({sz:.1f} MB)")
+
+        summary = {
+            "total_frames": total_frames, "chunks_processed": len(chunks),
+            "graph_nodes": g_nodes, "graph_edges": g_edges,
+            "node_types": dict(type_counts), "edge_types": dict(edge_type_counts),
+            "engine_n_deltas": engine.n_deltas,
+        }
+        summary_path = out_dir / "phase5_kg_summary.json"
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2)
+        print(f"[+] summary saved: {summary_path}")
+
+    # 若配置了 Neo4j, 写入
+    if neo4j_config:
+        try:
+            _write_to_neo4j(graph_obj, neo4j_config, out_dir)
+        except Exception as e:
+            print(f"[!] Neo4j write failed: {e}")
+    else:
+        print("[*] Neo4j not configured. SKIP.")
+
+    tim = time.time() - t0
+    print(f"[OK] Phase5 done ({tim:.1f}s)")
+
+
+# ------------- Pipeline Checkpoint -------------
+
+def _write_pipeline_checkpoint(
+    ckpt_path: Path, chunk_idx: int,
+    beh_gen, engine,
+    all_maneuvers_raw, all_interactions_raw,
+    all_behavior_rels_raw, all_cross_layer_rels_raw,
+    all_ruleouts_raw, total_frames: int,
+) -> None:
+    """序列化当前 pipeline 状态到 checkpoint 文件 (每 chunk 写入一次)."""
+    import io
+    ckpt = {
+        "chunk_idx": chunk_idx,
+        "total_frames": total_frames,
+        "beh_gen": beh_gen.to_dict(),
+        "engine": engine.to_dict(),
+        "beh_gen_stats": beh_gen.stats(),
+        # 累积容器的数量 (内容放在 fallback JSON 中)
+        "n_maneuvers_raw": len(all_maneuvers_raw),
+        "n_interactions_raw": len(all_interactions_raw),
+        "n_behavior_rels_raw": len(all_behavior_rels_raw),
+        "n_cross_layer_rels_raw": len(all_cross_layer_rels_raw),
+        "n_ruleouts_raw": len(all_ruleouts_raw),
+        "timestamp": __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S"),
+    }
+    # 累积容器本身太大 (特别是 all_ruleouts_raw 和 phase2_frames), 仅序列化关键状态
+    # 保留 ALL 容器的内容用于 resume 重建 (它们是 dict/list, JSON 可序列化)
+    ckpt.update({
+        "all_maneuvers_raw": all_maneuvers_raw[-1000:] if len(all_maneuvers_raw) > 1000 else all_maneuvers_raw,
+        "all_interactions_raw": all_interactions_raw[-1000:] if len(all_interactions_raw) > 1000 else all_interactions_raw,
+        "all_behavior_rels_raw": all_behavior_rels_raw[-1000:] if len(all_behavior_rels_raw) > 1000 else all_behavior_rels_raw,
+        "all_cross_layer_rels_raw": all_cross_layer_rels_raw[-1000:] if len(all_cross_layer_rels_raw) > 1000 else all_cross_layer_rels_raw,
+        "all_ruleouts_raw": all_ruleouts_raw[-500:] if len(all_ruleouts_raw) > 500 else all_ruleouts_raw,
+    })
+    tmp = ckpt_path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(ckpt, f, ensure_ascii=False, indent=2, default=str)
+    tmp.replace(ckpt_path)
+
+
+def _write_to_neo4j(graph_obj, config, out_dir):
+    """通过 stk/storage/writer.py 写入 Neo4j.
+
+    如果不想引入 Neo4j 依赖, 保持 JSON 输出兼容.
+    """
+    from stk.storage.connector import Neo4jConnectionPool
+    from stk.storage.writer import GraphWriter
+
+    pool = Neo4jConnectionPool(
+        host=config["host"], port=config["port"],
+        user=config["user"], password=config["password"],
+    )
+    writer = GraphWriter(pool)
+    writer.write_graph(graph_obj)
+    writer.close()
+    pool.close()
+
+
+def main():
+    p = argparse.ArgumentParser(description="Cross-chunk Phase2→5 orchestrator")
+    p.add_argument("--run-dir", required=True, help="collect.py 输出目录 (含 chunks)")
+    p.add_argument("--tick-s", type=float, default=0.05, help="帧间隔 (秒)")
+    p.add_argument("--map-name", default="Town10HD", help="地图名")
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--neo4j-host", default=None, help="Neo4j 地址 (不指定则仅输出 JSON)")
+    p.add_argument("--neo4j-port", type=int, default=7687)
+    p.add_argument("--neo4j-user", default="neo4j")
+    p.add_argument("--neo4j-password", default="password")
+    p.add_argument("--out", default=None, help="输出目录 (默认 = run_dir/phase5)")
+    p.add_argument("--no-resume", action="store_true",
+                   help="忽略已有 pipeline_checkpoint.json, 从头处理所有 chunk")
+    args = p.parse_args()
+
+    run_dir = Path(args.run_dir)
+    if not run_dir.exists():
+        print(f"[FATAL] run-dir not found: {run_dir}")
+        sys.exit(1)
+
+    chunks = load_chunks(run_dir)
+    if not chunks:
+        print(f"[FATAL] no chunk_*.json found in {run_dir}")
+        sys.exit(1)
+    print(f"[+] found {len(chunks)} chunk files")
+
+    out_dir = Path(args.out) if args.out else (run_dir / "phase5")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Pipeline checkpoint path
+    checkpoint_path = None if args.no_resume else (out_dir / "pipeline_checkpoint.json")
+
+    # Static lanes
+    banner("Static lane extraction (跨分块共用)")
+    static = extract_static_lanes(chunks)
+    print(f"[+] static: lanes={len(static['lanes'])}, topo_edges={len(static['topo'])}")
+
+    neo4j_config = None
+    if args.neo4j_host:
+        neo4j_config = {
+            "host": args.neo4j_host, "port": args.neo4j_port,
+            "user": args.neo4j_user, "password": args.neo4j_password,
+        }
+
+    process_chunks(
+        chunks=chunks, static=static,
+        tick_s=args.tick_s, map_name=args.map_name,
+        seed=args.seed, neo4j_config=neo4j_config,
+        out_dir=out_dir,
+        checkpoint_path=checkpoint_path,
+    )
+
+    print("\n[OK] Pipeline done.")
+    print(f"     chunks processed: {len(chunks)}")
+    print(f"     output: {out_dir}")
+
+
+if __name__ == "__main__":
+    main()

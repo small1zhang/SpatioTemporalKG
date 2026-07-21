@@ -160,3 +160,36 @@ class RelationDebouncer:
             else:
                 pending.append(entry)
         return {"active": active, "pending": pending, "n_active": len(active), "n_pending": len(pending)}
+
+    # ---------------- 序列化 (用于 checkpoint) ----------------
+
+    def to_dict(self) -> Dict[str, Any]:
+        """把防抖状态导出为可 JSON 序列化的 dict."""
+        thresholds_s = {k: v for k, v in self._thresholds.items()}
+        items_s = {}
+        for key, item in self._items.items():
+            items_s[str(key)] = {
+                "threshold": item.threshold,
+                "counter": item.counter,
+                "is_active": item.is_active,
+                "active_since": item.active_since,
+                "last_condition_met": item.last_condition_met,
+            }
+        return {"thresholds": thresholds_s, "items": items_s}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RelationDebouncer":
+        """从 to_dict() 恢复防抖状态."""
+        obj = cls(thresholds=data.get("thresholds"))
+        for key_str, item_data in data.get("items", {}).items():
+            # key 用 eval 还原 tuple (固定结构, 安全)
+            key = eval(key_str)  # (src_id, dst_id, rel_type)
+            if not isinstance(key, tuple) or len(key) != 3:
+                continue
+            d_item = DebounceItem(item_data["threshold"])
+            d_item.counter = item_data["counter"]
+            d_item.is_active = item_data["is_active"]
+            d_item.active_since = item_data.get("active_since")
+            d_item.last_condition_met = item_data.get("last_condition_met")
+            obj._items[key] = d_item
+        return obj

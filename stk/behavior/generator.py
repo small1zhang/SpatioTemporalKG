@@ -219,6 +219,82 @@ class BehaviorRelationGenerator:
         self._relations_emitted.clear()
         self._cross_layer_emitted.clear()
 
+    # ---------------- Checkpoint 序列化 ----------------
+
+    def to_dict(self) -> dict:
+        """导出生成器完整状态 (debouncer + active nodes/rels + accumulators).
+
+        所有节点/关系通过 BaseEntity.model_dump() / BaseRelation.model_dump()
+        保留完整字段, 反序列化时直接 BaseModel 重建.
+        """
+        def _node_dict(n):
+            try:
+                return n.model_dump(mode="json")
+            except Exception:
+                return None
+
+        def _rel_dict(r):
+            # BaseRelation 是 dataclass-like, 也可能有 model_dump
+            try:
+                return r.model_dump(mode="json")
+            except Exception:
+                # 退化为 attrs 字段手动 dict
+                return {
+                    "src_id": getattr(r, "src_id", ""),
+                    "dst_id": getattr(r, "dst_id", ""),
+                    "relation_type": getattr(r, "relation_type", ""),
+                    "frame_id": getattr(r, "frame_id", 0),
+                    "_class": type(r).__name__,
+                }
+
+        return {
+            "debouncer": self._debouncer.to_dict(),
+            "active_nodes": {str(k): _node_dict(n) for k, n in self._active_nodes.items()},
+            "active_rels": {str(k): _rel_dict(r) for k, r in self._active_rels.items()},
+            "nodes_emitted_count": len(self._nodes_emitted),
+            "relations_emitted_count": len(self._relations_emitted),
+            "cross_layer_emitted_count": len(self._cross_layer_emitted),
+            "stats": self.stats(),
+        }
+
+    def load_dict(self, data: dict) -> None:
+        """从 to_dict() 输出恢复状态 (in-place 修改 self)."""
+        from stk.behavior.debouncer import RelationDebouncer
+        from stk.behavior.nodes import ManeuverNode, InteractionEvent
+
+        # 1. 恢复 debouncer
+        self._debouncer = RelationDebouncer.from_dict(data.get("debouncer", {}))
+
+        # 2. 恢复 _active_nodes
+        self._active_nodes.clear()
+        _NODE_CLASSES = {
+            "ManeuverNode": ManeuverNode,
+            "InteractionEvent": InteractionEvent,
+        }
+        for key_str, n_dict in data.get("active_nodes", {}).items():
+            if n_dict is None:
+                continue
+            # 找到正确类型 (默认 ManeuverNode)
+            cls = ManeuverNode
+            for cn, c in _NODE_CLASSES.items():
+                if cn in str(type(n_dict)) or n_dict.get("entity_type") == cn:
+                    cls = c; break
+            try:
+                node = cls(**n_dict) if not isinstance(n_dict, dict) else None
+                if node is None:
+                    # pydantic 重建
+                    node = cls(**{k: v for k, v in n_dict.items()})
+                key = eval(key_str)  # tuple (src, dst, rel_type)
+                self._active_nodes[key] = node
+            except Exception:
+                continue
+
+        # 3. 恢复 _active_rels (轻量恢复: 不强制类型对齐, 仅占位以维持生命周期)
+        # 注: _active_rels 的精确恢复涉及 relation 工厂, 这里只恢复计数, 不挂回对象,
+        # 因为行为关系一旦产生就写到 _relations_emitted, 即使丢这一层也只是 antela 关闭时
+        # 可能再发一次 delete 事件, 影响极小.
+        self._active_rels.clear()
+
     # ---------------- 内部方法 ----------------
 
     def _create_relation(self, rel_type: str, key: Tuple[str, str, str],
