@@ -75,6 +75,9 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
     """
     if isinstance(frame_snapshot, list):
         frames = frame_snapshot
+    elif hasattr(frame_snapshot, "__iter__") and not isinstance(frame_snapshot, (dict, str, bytes)):
+        # generator / iterator → 一次性 materialize (serializer 后续会用 len/indexed access)
+        frames = list(frame_snapshot)
     else:
         frames = [frame_snapshot]
 

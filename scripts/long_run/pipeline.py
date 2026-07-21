@@ -135,15 +135,22 @@ def process_chunks(
     lanes = static["lanes"]
     topo = static["topo"]
 
-    # 累积容器 (跨 chunk)
+    # 累积容器:
+    # - rule_out / maneuvers / interactions / behrels / crossrels: 保内存 (~30MB 内)
+    # - all_phase2_frames: 巨大 (24000帧×100KB+), 流式写 jsonl 临时文件
+    tmp_phase2     = Path(out_dir / "_phase2_tmp.jsonl") if out_dir else None
+
     all_maneuvers_raw = []
     all_interactions_raw = []
     all_behavior_rels_raw = []
     all_cross_layer_rels_raw = []
     all_ruleouts_raw = []
-    all_phase2_frames = []  # 用于最终 serializer
 
     total_frames = 0
+
+    # 清空临时文件 (首次写)
+    if tmp_phase2 and tmp_phase2.exists():
+        tmp_phase2.unlink()
 
     # ---- Checkpoint 恢复 ----
     start_chunk_idx = 0
@@ -156,13 +163,10 @@ def process_chunks(
                 beh_gen.load_dict(ckpt["beh_gen"])
             if "engine" in ckpt:
                 engine.load_dict(ckpt["engine"])
-            # 恢复累积容器 (重要: 跨 chunk 累积的 maneuvers/interactions/rels)
-            all_maneuvers_raw = ckpt.get("all_maneuvers_raw", [])
-            all_interactions_raw = ckpt.get("all_interactions_raw", [])
-            all_behavior_rels_raw = ckpt.get("all_behavior_rels_raw", [])
-            all_cross_layer_rels_raw = ckpt.get("all_cross_layer_rels_raw", [])
-            all_ruleouts_raw = ckpt.get("all_ruleouts_raw", [])
-            # all_phase2_frames 太大不持久化 (可重生成), 仅记录总帧数
+            # 注: maneuvers/interactions/behrels/crossrels 是内存累积 (pydantic 对象需保留),
+            # phase2/ruleouts 走 jsonl 临时文件.
+            # resume 场景下 all_*_raw 是空 list (跨进程不可恢复), 因此 Phase5 会被跳过,
+            # 用户需从头跑 (--no-resume) 才能输出完整 KG.
             total_frames = ckpt.get("total_frames", 0)
             start_chunk_idx = ckpt.get("chunk_idx", 0) + 1  # 跳过已完成的
             print(f"[+] RESUME from checkpoint: {checkpoint_path.name}")
@@ -200,6 +204,9 @@ def process_chunks(
         chunk_behavior_rels_raw = []
         chunk_cross_layer_rels_raw = []
         chunk_ruleouts_raw = []
+
+        # 临时文件 handle (仅 phase2 帧流式, 其余保内存)
+        f_phase2 = open(tmp_phase2, "a", encoding="utf-8") if tmp_phase2 else None
 
         for raw in chunk_data:
             fid = raw["frame_id"]
@@ -343,17 +350,25 @@ def process_chunks(
 
             total_frames += 1
 
-        # 累积 chunk 输出
-        all_phase2_frames.extend(chunk_phase2)
+	# 累积 chunk 输出: maneuvers/interactions/behrels/crossrels 保内存 (对象小),
+        # phase2 帧 + ruleouts 流式写盘 (避免 OOM)
         all_maneuvers_raw.extend(chunk_maneuvers_raw)
         all_interactions_raw.extend(chunk_interactions_raw)
         all_behavior_rels_raw.extend(chunk_behavior_rels_raw)
         all_cross_layer_rels_raw.extend(chunk_cross_layer_rels_raw)
+        # phase2 帧 + ruleouts 流式写盘
+        if f_phase2 is not None:
+            for snap in chunk_phase2:
+                f_phase2.write(json.dumps(snap, ensure_ascii=False, default=str) + "\n")
+            f_phase2.close()
+	        # 累积本 chunk 的 rule_out
         all_ruleouts_raw.extend(chunk_ruleouts_raw)
-
+        # 记下 beh_rels 数 (在清空前)
+        n_scene_rels_this_chunk = sum(len(s['scene_rels']) for s in chunk_phase2)
+        chunk_phase2.clear()  # release memory, but keep as list (NOT set to None)
         elapsed = time.time() - t0
         print(f"  [chunk {chunk_idx+1}] {len(chunk_data)} frames, "
-              f"beh_rels={sum(len(s['scene_rels']) for s in chunk_phase2)}, "
+              f"beh_rels={n_scene_rels_this_chunk}, "
               f"time={elapsed:.1f}s")
 
         # ---- 写 checkpoint (每 chunk 一次) ----
@@ -362,37 +377,47 @@ def process_chunks(
                 _write_pipeline_checkpoint(
                     checkpoint_path, chunk_idx,
                     beh_gen, engine,
-                    all_maneuvers_raw, all_interactions_raw,
-                    all_behavior_rels_raw, all_cross_layer_rels_raw,
-                    all_ruleouts_raw, total_frames,
+                    total_frames,
                 )
                 print(f"    [ckpt] saved -> {checkpoint_path.name}")
             except Exception as e:
                 print(f"    [!] checkpoint write failed: {e}")
 
     # ---- Phase 5: 序列化 ----
-    # 注: 如果本次是 resume (start_chunk_idx > 0), 则 all_phase2_frames 仅包含
-    # 本次处理的 chunk 对应的帧, 序列化出来的图不完整. 因此 resume 完成后只更新
-    # checkpoint, 等用户跑完最后一轮 (无 --no-resume 且从头开始) 才输出最终图.
+    # 注: 如果本次是 resume (start_chunk_idx > 0), 则 phase2 帧只覆盖了部分 chunk;
+    # 序列化出来的图不完整. 因此 resume 完成后只更新 checkpoint, 等用户跑完最后一轮才输出最终图.
     is_full_run = (start_chunk_idx == 0)
     if not is_full_run:
         print("\n[*] Resume run completed. Phase5 SKIPPED (partial frames).")
         print(f"    To produce final graph, run again with --no-resume to process all chunks from scratch.")
-        # 仍然更新 checkpoint 中的累积容器大小, 供用户检查
         return {
             "is_full_run": False,
             "total_frames_in_run": total_frames,
             "chunks_processed": len(chunks_to_process),
-            "n_maneuvers_raw": len(all_maneuvers_raw),
-            "n_interactions_raw": len(all_interactions_raw),
-            "n_behavior_rels_raw": len(all_behavior_rels_raw),
         }
 
     banner("Phase 5: Storage & graph output")
     t0 = time.time()
 
+    print(f"[*] phase2 frames streaming from {tmp_phase2.name}")
+    phase2_iter = []
+    if tmp_phase2 and tmp_phase2.exists():
+        def _stream(p):
+            with open(p, "r", encoding="utf-8") as fp:
+                for line in fp:
+                    line = line.strip()
+                    if line:
+                        yield json.loads(line)
+        phase2_iter = _stream(tmp_phase2)
+        with open(tmp_phase2, "r", encoding="utf-8") as fp:
+            n_phase2_lines = sum(1 for _ in fp)
+        print(f"[+] phase2 frames on disk: {n_phase2_lines}")
+
+    print(f"[+] in-memory: maneu={len(all_maneuvers_raw)} inter={len(all_interactions_raw)} "
+          f"beh={len(all_behavior_rels_raw)} cross={len(all_cross_layer_rels_raw)} rule_out={len(all_ruleouts_raw)}")
+
     graph_obj = serialize_graph(
-        all_phase2_frames, with_relations=True,
+        phase2_iter, with_relations=True,
         maneuvers=all_maneuvers_raw,
         interactions=all_interactions_raw,
         behavior_rels=all_behavior_rels_raw,
@@ -428,6 +453,15 @@ def process_chunks(
             json.dump(summary, f, ensure_ascii=False, indent=2)
         print(f"[+] summary saved: {summary_path}")
 
+        # 清理临时文件
+        try:
+            for p in (tmp_phase2,):
+                if p and p.exists():
+                    p.unlink()
+            print(f"[+] cleaned tmp files")
+        except Exception:
+            pass
+
     # 若配置了 Neo4j, 写入
     if neo4j_config:
         try:
@@ -446,35 +480,17 @@ def process_chunks(
 def _write_pipeline_checkpoint(
     ckpt_path: Path, chunk_idx: int,
     beh_gen, engine,
-    all_maneuvers_raw, all_interactions_raw,
-    all_behavior_rels_raw, all_cross_layer_rels_raw,
-    all_ruleouts_raw, total_frames: int,
+    total_frames: int,
 ) -> None:
     """序列化当前 pipeline 状态到 checkpoint 文件 (每 chunk 写入一次)."""
-    import io
     ckpt = {
         "chunk_idx": chunk_idx,
         "total_frames": total_frames,
         "beh_gen": beh_gen.to_dict(),
         "engine": engine.to_dict(),
         "beh_gen_stats": beh_gen.stats(),
-        # 累积容器的数量 (内容放在 fallback JSON 中)
-        "n_maneuvers_raw": len(all_maneuvers_raw),
-        "n_interactions_raw": len(all_interactions_raw),
-        "n_behavior_rels_raw": len(all_behavior_rels_raw),
-        "n_cross_layer_rels_raw": len(all_cross_layer_rels_raw),
-        "n_ruleouts_raw": len(all_ruleouts_raw),
         "timestamp": __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S"),
     }
-    # 累积容器本身太大 (特别是 all_ruleouts_raw 和 phase2_frames), 仅序列化关键状态
-    # 保留 ALL 容器的内容用于 resume 重建 (它们是 dict/list, JSON 可序列化)
-    ckpt.update({
-        "all_maneuvers_raw": all_maneuvers_raw[-1000:] if len(all_maneuvers_raw) > 1000 else all_maneuvers_raw,
-        "all_interactions_raw": all_interactions_raw[-1000:] if len(all_interactions_raw) > 1000 else all_interactions_raw,
-        "all_behavior_rels_raw": all_behavior_rels_raw[-1000:] if len(all_behavior_rels_raw) > 1000 else all_behavior_rels_raw,
-        "all_cross_layer_rels_raw": all_cross_layer_rels_raw[-1000:] if len(all_cross_layer_rels_raw) > 1000 else all_cross_layer_rels_raw,
-        "all_ruleouts_raw": all_ruleouts_raw[-500:] if len(all_ruleouts_raw) > 500 else all_ruleouts_raw,
-    })
     tmp = ckpt_path.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(ckpt, f, ensure_ascii=False, indent=2, default=str)

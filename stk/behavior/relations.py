@@ -108,6 +108,7 @@ def following(vehicle_id: str, leader_id: str, frame_id: int,
               ttc: Optional[float] = None,
               long_along: Optional[float] = None,
               same_lane: Optional[bool] = None,
+              reason: Optional[str] = None,
               source_relations: Optional[List[str]] = None) -> BaseRelation:
     """Following: vehicle -> leader vehicle.
 
@@ -124,7 +125,8 @@ def following(vehicle_id: str, leader_id: str, frame_id: int,
                      "relative_speed": relative_speed,
                      "ttc": ttc,
                      "long_along": long_along,
-                     "same_lane": same_lane},
+                     "same_lane": same_lane,
+                     "reason": reason},
     )
 
 
@@ -205,18 +207,20 @@ def wrong_side_meeting(vehicle_a_id: str, vehicle_b_id: str, frame_id: int,
 
 def opposite_direction(vehicle_a_id: str, vehicle_b_id: str, frame_id: int,
                        closing_speed: float = 0.0,
+                       heading_diff: Optional[float] = None,
                        source_relations: Optional[List[str]] = None) -> BaseRelation:
     """OppositeDirection: vehicle -> vehicle.
 
     v3 sec 3.3.2.
-    边属性: closing_speed (相向接近的速度)
+    边属性: closing_speed (相向接近的速度), heading_diff (航向差 rad)
     """
     return build_relation(
         src_id=vehicle_a_id, dst_id=vehicle_b_id,
         rel_type=BehaviorRelationType.OPPOSITE_DIRECTION,
         frame_id=frame_id, valid_from=frame_id,
         source_relations=source_relations,
-        extra_attrs={"closing_speed": closing_speed},
+        extra_attrs={"closing_speed": closing_speed,
+                     "heading_diff": heading_diff},
     )
 
 

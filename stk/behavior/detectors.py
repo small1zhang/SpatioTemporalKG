@@ -377,8 +377,10 @@ def run_all_detectors(
         add("standing_still", eid, eid, cond, extra)
         cond, extra = detect_changing_lane(v, scene_relations)
         target_lane = extra.get("target_lane_id", "") or eid
-        # dst 用 target_lane_id (与 changing_lane 工厂签名一致), 不再用 eid 自环
-        add("changing_lane", eid, target_lane, cond, extra)
+        # dst 用 target_lane_id; extra 中只保留 factory 认可的字段
+        allowed_cl = {"lateral_speed"}
+        extra_cl = {k: v for k, v in extra.items() if k in allowed_cl}
+        add("changing_lane", eid, target_lane, cond, extra_cl)
 
     # 车辆 - 车辆交互
     for i, v_a in enumerate(vehicles):
