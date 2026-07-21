@@ -360,8 +360,17 @@ def main():
         world = client.get_world()
         print(f"[+] Loaded map: {world.get_map().name}")
     else:
-        # 地图已匹配, 但需清理旧 actors, 否则 spawn 阶段操作已销毁的 actor 会 crash
+        # 地图已匹配, 但需清理旧 actors.
+        # 注: 若之前 crash 残留了 synchronous_mode=True, 直接 world.get_actors() 会拿到过期
+        # 引用导致 destroyed_actor crash. 先关同步模式再清理.
         print(f"[*] Cleaning up existing actors on {current_map} ...")
+        try:
+            settings = world.get_settings()
+            settings.synchronous_mode = False
+            world.apply_settings(settings)
+        except Exception:
+            pass
+        time.sleep(1)  # 等异步模式切换
         to_kill = []
         for a in world.get_actors():
             try:

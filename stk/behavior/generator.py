@@ -333,7 +333,10 @@ class BehaviorRelationGenerator:
                 return factory(src_id, dst_id, frame_id, **extra_attrs)
             elif rel_type == "crossing":
                 return factory(src_id, dst_id, frame_id, **extra_attrs)
-        except TypeError:
+        except TypeError as e:
+            # 不静默吞错: 输出 warning 给 stderr, 仍返回 None 不阻塞管道
+            import sys
+            print(f"[behavior] _create_relation({rel_type}) TypeError: {e}", file=sys.stderr)
             return None
         return None
 

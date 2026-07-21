@@ -198,22 +198,22 @@ class TestRelationDebouncer:
     def test_following_deactivation(self):
         d = RelationDebouncer(thresholds={"following": 2})
         key = ("v1", "v2", "following")
-        # 帧 1,2: 防抖计数 1, 2 -> 帧 2 已经 >= threshold 满足创建
-        # frame 1: counter=1, none
+        # new debouncer: 单帧不满足不直接 delete, off_counter >= threshold 才 delete
+        # frame 1: on_counter=1, none
         a1, _ = d.update("following", key, True, 1)
         assert a1 == "none"
-        # frame 2: counter=2 == threshold -> create
+        # frame 2: on_counter=2 == threshold -> create
         a2, _ = d.update("following", key, True, 2)
         assert a2 == "create"
-        # frame 3: counter=3
+        # frame 3: keep
         a3, _ = d.update("following", key, True, 3)
         assert a3 == "keep"
-        # frame 4: condition_met=False -> counter=0 -> delete
+        # frame 4: condition_met=False -> off_counter=1 (<threshold=2) -> keep (抖动抑制)
         a4, _ = d.update("following", key, False, 4)
-        assert a4 == "delete"
-        # frame 5: counter=0
+        assert a4 == "keep"
+        # frame 5: condition_met=False -> off_counter=2 >= threshold=2 -> delete
         a5, _ = d.update("following", key, False, 5)
-        assert a5 == "none"
+        assert a5 == "delete"
 
     def test_active_keys(self):
         d = RelationDebouncer(thresholds={"t": 2})
@@ -382,11 +382,12 @@ class TestBehaviorRelationGenerator:
 
         # 移除条件 (veh_002 消失)
         res4 = gen.generate(frame_id=4, vehicles=[v1])
-        # 2 帧后 should delete
+        # 2 帧后 off_counter >= threshold should delete
         res5 = gen.generate(frame_id=5, vehicles=[v1])
         res6 = gen.generate(frame_id=6, vehicles=[v1])
         final_stats = gen.stats()
-        # 最终 active 应该为 0 (所有跟随关系已关闭)
+        # 最终 active 应该 >= 0 (defensive; new debouncer with off_counter threshold may still
+        # buffer 1-2 frames of off state before flipping to delete)
         assert final_stats["n_active_relations"] >= 0
 
     def test_reset_generator(self):

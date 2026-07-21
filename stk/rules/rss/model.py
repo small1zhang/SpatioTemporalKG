@@ -17,12 +17,12 @@ from typing import Any, Dict, List, Optional, Tuple
 # ============================================================
 
 DEFAULT_RSS_PARAMS: Dict[str, float] = {
-    "rho": 0.1,                # 反应时间 (s)
-    "a_max_accel": 1.5,        # 最大加速 (m/s^2)
-    "a_min_brake_long": 4.0,   # 最小纵向减速 (m/s^2)
+    "rho": 0.3,                # 反应时间 (s) —— RSS 论文标准 0.3
+    "a_max_accel": 0.5,        # 最大加速 (m/s^2) —— RSS 论文标准 0.5
+    "a_min_brake_long": 3.0,   # 最小纵向减速 (m/s^2) —— RSS 论文标准 3.0
     "a_brake_long": 8.0,       # 前车最大减速 (m/s^2)
     "mu": 0.5,                 # 横向安全裕度 (m)
-    "a_min_brake_lat": 1.0,    # 最小横向减速 (m/s^2)
+    "a_min_brake_lat": 1.5,    # 最小横向减速 (m/s^2) —— RSS 论文标准 1.5
     "a_brake_lat": 3.0,        # 目标横向减速 (m/s^2)
 }
 

@@ -128,6 +128,7 @@ class SafetyViolation(BaseEntity):
                  predicate_str='',
                  evidence_path=None,
                  related_actors=None,
+                 rule_parameters=None,
                  extra_attrs=None,
                  valid_from=None, valid_to=None):
         if rule_layer not in ('RSS', 'TrafficLaw'):
@@ -145,6 +146,7 @@ class SafetyViolation(BaseEntity):
             'dst_id': dst_id,
             'evidence_path': evidence_path or [],
             'related_actors': related_actors or [],
+            'rule_parameters': rule_parameters or {},
         }
         if extra_attrs:
             attrs.update(extra_attrs)

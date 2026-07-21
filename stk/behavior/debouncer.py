@@ -50,7 +50,8 @@ class DebounceItem:
 
     def __init__(self, threshold: int):
         self.threshold = threshold
-        self.counter: int = 0
+        self.on_counter: int = 0       # 连续满足帧数
+        self.off_counter: int = 0      # 连续不满足帧数 (NEW: 单帧抖动不直接关节点)
         self.is_active: bool = False
         self.active_since: Optional[int] = None
         self.last_condition_met: Optional[bool] = None
@@ -63,23 +64,29 @@ class DebounceItem:
             action: "create" / "delete" / "keep" / "none"
         """
         if condition_met:
-            self.counter += 1
+            self.on_counter += 1
+            self.off_counter = 0
         else:
-            self.counter = 0  # v3 sec 3.4.3: 条件消失立即重置计数器
+            self.off_counter += 1
+            self.on_counter = 0
+        self.last_condition_met = condition_met
 
-        if condition_met and not self.is_active and self.counter >= self.threshold:
+        if condition_met and not self.is_active and self.on_counter >= self.threshold:
             # 正式创建
             self.is_active = True
             self.active_since = frame_id
-            return ("create", {"debounce_activated": frame_id, "counter": self.counter})
+            return ("create", {"debounce_activated": frame_id, "on_counter": self.on_counter})
         elif condition_met and self.is_active:
-            return ("keep", {"debounce_counter": self.counter})
-        elif not condition_met and self.is_active and self.counter <= 0:
-            # 条件消失已持续 threshold 帧 -> 正式删除
+            return ("keep", {"on_counter": self.on_counter})
+        elif not condition_met and self.is_active and self.off_counter >= self.threshold:
+            # 条件消失也已持续 threshold 帧 -> 正式删除
             self.is_active = False
             self.active_since = None
-            return ("delete", {"debounce_deactivated": frame_id, "counter": self.counter})
-        elif not condition_met:
+            return ("delete", {"debounce_deactivated": frame_id, "off_counter": self.off_counter})
+        elif not condition_met and self.is_active:
+            # 已激活状态下短时抖动, 维持 keep 抑制噪声
+            return ("keep", {"on_counter": 0, "off_counter": self.off_counter})
+        else:
             return ("none", None)
 
 
@@ -153,7 +160,7 @@ class RelationDebouncer:
         active = []
         pending = []
         for key, item in self._items.items():
-            entry = {"key": key, "counter": item.counter,
+            entry = {"key": key, "on_counter": item.on_counter, "off_counter": item.off_counter,
                      "threshold": item.threshold, "is_active": item.is_active}
             if item.is_active:
                 active.append(entry)
@@ -170,7 +177,8 @@ class RelationDebouncer:
         for key, item in self._items.items():
             items_s[str(key)] = {
                 "threshold": item.threshold,
-                "counter": item.counter,
+                "on_counter": item.on_counter,
+                "off_counter": item.off_counter,
                 "is_active": item.is_active,
                 "active_since": item.active_since,
                 "last_condition_met": item.last_condition_met,
@@ -187,7 +195,14 @@ class RelationDebouncer:
             if not isinstance(key, tuple) or len(key) != 3:
                 continue
             d_item = DebounceItem(item_data["threshold"])
-            d_item.counter = item_data["counter"]
+            # 兼容旧格式 (只有 counter 字段) 和新格式 (on_counter/off_counter)
+            if "on_counter" in item_data:
+                d_item.on_counter = item_data["on_counter"]
+                d_item.off_counter = item_data.get("off_counter", 0)
+            else:
+                # 旧格式: 用 counter 作为 on_counter
+                d_item.on_counter = item_data.get("counter", 0)
+                d_item.off_counter = 0
             d_item.is_active = item_data["is_active"]
             d_item.active_since = item_data.get("active_since")
             d_item.last_condition_met = item_data.get("last_condition_met")

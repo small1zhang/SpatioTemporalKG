@@ -106,6 +106,8 @@ def changing_lane(vehicle_id: str, target_lane_id: str, frame_id: int,
 def following(vehicle_id: str, leader_id: str, frame_id: int,
               distance: float, relative_speed: float = 0.0,
               ttc: Optional[float] = None,
+              long_along: Optional[float] = None,
+              same_lane: Optional[bool] = None,
               source_relations: Optional[List[str]] = None) -> BaseRelation:
     """Following: vehicle -> leader vehicle.
 
@@ -120,7 +122,9 @@ def following(vehicle_id: str, leader_id: str, frame_id: int,
         source_relations=source_relations,
         extra_attrs={"distance": distance,
                      "relative_speed": relative_speed,
-                     "ttc": ttc},
+                     "ttc": ttc,
+                     "long_along": long_along,
+                     "same_lane": same_lane},
     )
 
 

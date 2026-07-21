@@ -12,6 +12,7 @@
   BehaviorRelationGenerator.generate() -> {behavior_rels} (含防抖)
 """
 from __future__ import annotations
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from stk.ontology.types import SceneRelationType, BehaviorRelationType
@@ -77,15 +78,30 @@ def detect_changing_lane(vehicle: Dict[str, Any],
     条件: 横向速度 > LANE_CHANGE_LATERAL_SPEED
           且相邻车道存在
           且 in_junction == False (交叉口内不算变道)
-    简化实现: 使用 scenario.relations.adjacent_lane + lateral_speed
+    修复: 用 heading 将 vx/vy 旋转到车体系求真横向速度;
+          根据 scene_relations 或 lane_id 推导 target_lane_id.
     """
     vx = vehicle.get("velocity_x", 0.0)
     vy = vehicle.get("velocity_y", 0.0)
-    # 估计横向速度: 以 heading 将 vx,vy 旋转到车道坐标系
-    # 简化: 用 vy 绝对值 > 0.3 近似
-    lateral_speed = abs(vy)
-    condition_met = lateral_speed > LANE_CHANGE_LATERAL_SPEED
-    extra = {"lateral_speed": lateral_speed, "velocity_x": vx, "velocity_y": vy}
+    heading = vehicle.get("heading_rad", 0.0)
+    # 用 heading 把世界速度向量旋转到车体系, 横向分量 = -vx*sin + vy*cos
+    lateral_speed = abs(-vx * math.sin(heading) + vy * math.cos(heading))
+    # 从 scene_relations 找本车的 adjacent_lane 目标 (优先场景提供)
+    eid = vehicle.get("entity_id", "")
+    target_lane_id = ""
+    for r in scene_relations or []:
+        if r.get("relation_type") == "adjacent_lane" and r.get("src_id") == eid:
+            target_lane_id = r.get("dst_id", "")
+            break
+    if not target_lane_id:
+        # 兜底: 用 vehicle.get("lane_id") 派生
+        lane_id = vehicle.get("lane_id")
+        if lane_id is not None:
+            target_lane_id = f"road_{vehicle.get('road_id', 0)}_lane_{lane_id}"
+    condition_met = lateral_speed > LANE_CHANGE_LATERAL_SPEED and bool(target_lane_id)
+    extra = {"lateral_speed": round(lateral_speed, 3),
+             "target_lane_id": target_lane_id,
+             "velocity_x": vx, "velocity_y": vy}
     return condition_met, extra
 
 
@@ -103,39 +119,58 @@ def detect_following(vehicle: Dict[str, Any],
       - 车间距 < FOLLOWING_MAX_DISTANCE
       - 前车在前方 (v -[ahead_of]-> w 或 if v.speed < w.speed 后车逼近前车)
 
+    修复: 用 heading 投影判断 leader 是否在 vehicle 前方;
+          同车道判定使用 lane_id 比较;
+          closing_speed ≤ 0 时 ttc=None 不篡改.
+
     Args:
-        vehicle: ego 车辆属性 dict
+        vehicle: 后车属性 dict
         leader: 前车属性 dict
 
     Returns:
         (condition_met, extra_attrs)
-        extra_attrs: distance, relative_speed, ttc
+        extra_attrs: distance, relative_speed, ttc, long_along, same_lane
     """
-    # 简化实现: 根据位置和速度推定
     v_x = vehicle.get("location_x", 0.0)
     v_y = vehicle.get("location_y", 0.0)
     l_x = leader.get("location_x", 0.0)
     l_y = leader.get("location_y", 0.0)
     dx = l_x - v_x
     dy = l_y - v_y
-    distance = (dx ** 2 + dy ** 2) ** 0.5
+    distance = math.hypot(dx, dy)
 
-    if distance > FOLLOWING_MAX_DISTANCE or distance < 1.0:
-        return (False, {"distance": distance, "relative_speed": 0.0, "ttc": None})
+    if distance > FOLLOWING_MAX_DISTANCE or distance < 0.5:
+        return (False, {"distance": round(distance, 2), "relative_speed": 0.0,
+                        "ttc": None, "reason": "out_of_range"})
+
+    v_heading = vehicle.get("heading_rad", 0.0)
+    # 把 (dx,dy) 投影到 vehicle 坐标系, 前方 = 沿 heading 的正分量
+    long_along = dx * math.cos(v_heading) + dy * math.sin(v_heading)
+    if long_along <= 0:
+        return (False, {"distance": round(distance, 2), "relative_speed": 0.0,
+                        "ttc": None, "reason": "leader_not_ahead"})
 
     v_speed = vehicle.get("speed", 0.0)
     l_speed = leader.get("speed", 0.0)
-    relative_speed = v_speed - l_speed  # 正值 = 后车更快
+    closing_speed = v_speed - l_speed  # 正值 = 后车逼近前车
 
-    # TTC = 距离 / closing_speed (正向相对速度)
-    closing_speed = max(relative_speed, 0.1)
-    ttc = distance / closing_speed if closing_speed > 0 else None
+    if closing_speed <= 0:
+        ttc = None
+        condition_met = distance < FOLLOWING_MAX_DISTANCE
+    else:
+        ttc = distance / closing_speed
+        condition_met = distance < FOLLOWING_MAX_DISTANCE
 
-    condition_met = distance < FOLLOWING_MAX_DISTANCE
+    # 同车道判定 (从 lane_id 比较; 若缺失则默认 True 保留可观察)
+    same_lane = (vehicle.get("lane_id") == leader.get("lane_id")) or vehicle.get("lane_id") is None
+    condition_met = condition_met and same_lane
+
     return (condition_met, {
         "distance": round(distance, 2),
-        "relative_speed": round(relative_speed, 2),
+        "relative_speed": round(closing_speed, 2),
         "ttc": round(ttc, 2) if ttc is not None else None,
+        "long_along": round(long_along, 2),
+        "same_lane": same_lane,
     })
 
 
@@ -341,7 +376,9 @@ def run_all_detectors(
         cond, extra = detect_standing_still(v)
         add("standing_still", eid, eid, cond, extra)
         cond, extra = detect_changing_lane(v, scene_relations)
-        add("changing_lane", eid, eid, cond, extra)
+        target_lane = extra.get("target_lane_id", "") or eid
+        # dst 用 target_lane_id (与 changing_lane 工厂签名一致), 不再用 eid 自环
+        add("changing_lane", eid, target_lane, cond, extra)
 
     # 车辆 - 车辆交互
     for i, v_a in enumerate(vehicles):
