@@ -143,6 +143,24 @@ class EgoCentricConfig:
     filter_behavior_detectors: bool = False
     filter_scene_spatial: bool = False
 
+    # ── 实体重要性打分 (阶段 3: E1-E5) ──
+    importance_threshold: float = 0.30
+    """重要性得分阈值, <threshold 的实体和边在序列化时被剔除. -1 表示不过滤."""
+    importance_weights: Dict[str, float] = field(default_factory=lambda: {
+        "ego": 0.40,
+        "distance": 0.20,
+        "visibility": 0.15,
+        "interaction": 0.15,
+        "anomaly": 0.10,
+    })
+    """E1-E5 加权权重, auto-normalize (总和应≈1.0)."""
+
+    # ── 静态背景外移 (阶段 3) ──
+    exclude_lanes: bool = True
+    """True= lane 节点/边不进 KG, 信息平铺到 VehicleEntity.attrs.lane_id."""
+    exclude_road_elements: bool = False
+    """True= RoadElement 节点不进 KG (暂缺静态提取器, 默认关)."""
+
     def _radii_for(self, entity: dict) -> tuple:
         """返回给定 entity 的 (radius_front, radius_rear, radius_side).
 

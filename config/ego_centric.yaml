@@ -32,3 +32,19 @@ legacy_full_pairing: false  # true 时退回到全对子 O(N²) 枚举
 # ── 下游协同过滤开关 (阶段 2/3 启用) ──
 filter_behavior_detectors: false
 filter_scene_spatial: false
+
+# ── 实体重要性打分 (阶段 3: E1-E5) ──
+# 序列化前对 nodes/edges 按打分裁剪; -1 表示不过滤
+importance_threshold: 0.30
+importance_weights:
+  ego: 0.40          # E1: 自车本身
+  distance: 0.20     # E2: 距 ego 的距离衰减
+  visibility: 0.15   # E3: 与 ego 有 spatia/behavior 关系
+  interaction: 0.15  # E4: 与 ego 有交互 (现与 E3 共用)
+  anomaly: 0.10      # E5: 是 anomaly_target
+
+# ── 静态背景外移 (阶段 3) ──
+# exclude_lanes=true: lane 节点/lane_connects/adjacent_lane/in_lane 边不进 KG,
+# 仅在 VehicleEntity.attrs.lane_id 平铺保留语义
+exclude_lanes: true
+exclude_road_elements: false   # 暂保留关闭
