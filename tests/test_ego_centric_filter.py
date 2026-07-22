@@ -243,3 +243,112 @@ class TestEgoCentricConfig:
         cfg.update_from({"radius_side": 60.0, "hysteresis_frames": 5})
         assert cfg.radius_side == 60.0
         assert cfg.hysteresis_frames == 5
+
+
+# ════════════════════════════════════════════
+# 阶段 2: 按类别差异化 ROI 半径
+# ════════════════════════════════════════════
+
+
+class TestRadiiByCategory:
+    """EgoCentricConfig._radii_for 按类别差异化半径查询."""
+
+    def test_car_radii_default(self):
+        cfg = EgoCentricConfig.default()
+        rf, rr, rs = cfg._radii_for({"entity_type": "Vehicle", "vehicle_category": "car"})
+        assert (rf, rr, rs) == (70.0, 30.0, 50.0)
+
+    def test_bicycle_radii_smaller_than_car(self):
+        cfg = EgoCentricConfig.default()
+        rf, rr, rs = cfg._radii_for({"entity_type": "Vehicle", "vehicle_category": "bicycle"})
+        assert (rf, rr, rs) == (50.0, 25.0, 40.0)
+        # 比同位置的 car 半径小
+        rf_car, _, _ = cfg._radii_for({"entity_type": "Vehicle", "vehicle_category": "car"})
+        assert rf < rf_car
+
+    def test_motorcycle_radii(self):
+        cfg = EgoCentricConfig.default()
+        rf, rr, rs = cfg._radii_for({"entity_type": "Vehicle", "vehicle_category": "motorcycle"})
+        assert (rf, rr, rs) == (50.0, 25.0, 40.0)
+
+    def test_pedestrian_radii_via_entity_type(self):
+        """entity_type==Pedestrian 优先用 pedestrian_radius_*."""
+        cfg = EgoCentricConfig.default()
+        rf, rr, rs = cfg._radii_for({"entity_type": "Pedestrian"})
+        assert (rf, rr, rs) == (40.0, 20.0, 40.0)
+
+    def test_unknown_category_fallback(self):
+        """未知 vehicle_category 回退到通用 radius_front/rear/side."""
+        cfg = EgoCentricConfig.default()
+        rf, rr, rs = cfg._radii_for({"entity_type": "Vehicle", "vehicle_category": "unknown"})
+        assert (rf, rr, rs) == (cfg.radius_front, cfg.radius_rear, cfg.radius_side)
+
+    def test_no_category_field_fallback(self):
+        """无 vehicle_category 字段时回退到通用半径."""
+        cfg = EgoCentricConfig.default()
+        rf, rr, rs = cfg._radii_for({"entity_type": "Vehicle"})
+        assert (rf, rr, rs) == (cfg.radius_front, cfg.radius_rear, cfg.radius_side)
+
+
+class TestSelectByCategory:
+    """EgoCentricFilter.select 按目标类别差异化半径."""
+
+    def test_bicycle_in_roi_beyond_car_radius(self):
+        """自行车在 60m 处 (超出 bicycle R_front=50) 应被 ROI 排除.
+           若仍用 car R_front=70 则会包含, 本测试验证差异化生效."""
+        cfg = EgoCentricConfig.default()
+        ef = EgoCentricFilter(cfg)
+        vehicles = [
+            {"entity_id": "ego", "location_x": 0, "location_y": 0, "heading_rad": 0, "is_ego": True},
+            {"entity_id": "bike", "location_x": 60, "location_y": 0,
+             "heading_rad": 0, "vehicle_category": "bicycle"},
+        ]
+        decision = ef.select(vehicles, frame_id=1)
+        # 60m > bicycle R_front(50) → dropped
+        assert decision.roi_targets == []
+        assert len(decision.dropped) == 1
+        assert decision.dropped[0]["entity_id"] == "bike"
+
+    def test_car_in_roi_at_same_60m(self):
+        """对照: 普通车在 60m 处 (car R_front=70) 应进 ROI."""
+        cfg = EgoCentricConfig.default()
+        ef = EgoCentricFilter(cfg)
+        vehicles = [
+            {"entity_id": "ego", "location_x": 0, "location_y": 0, "heading_rad": 0, "is_ego": True},
+            {"entity_id": "car", "location_x": 60, "location_y": 0,
+             "heading_rad": 0, "vehicle_category": "car"},
+        ]
+        decision = ef.select(vehicles, frame_id=1)
+        assert len(decision.roi_targets) == 1
+        assert decision.roi_targets[0]["entity_id"] == "car"
+
+    def test_pedestrian_in_roi(self):
+        """行人在 30m 处 (pedestrian R_front=40) 应进 roi_pedestrians."""
+        cfg = EgoCentricConfig.default()
+        ef = EgoCentricFilter(cfg)
+        vehicles = [
+            {"entity_id": "ego", "location_x": 0, "location_y": 0, "heading_rad": 0, "is_ego": True},
+        ]
+        peds = [
+            {"entity_id": "ped1", "entity_type": "Pedestrian",
+             "location_x": 30, "location_y": 0},
+        ]
+        decision = ef.select(vehicles, pedestrians=peds, frame_id=1)
+        assert len(decision.roi_pedestrians) == 1
+        assert decision.roi_pedestrians[0]["entity_id"] == "ped1"
+        assert decision.dropped_pedestrians == []
+
+    def test_pedestrian_out_of_roi(self):
+        """行人在 60m 处 (pedestrian R_front=40) 应被 ROI 排除."""
+        cfg = EgoCentricConfig.default()
+        ef = EgoCentricFilter(cfg)
+        vehicles = [
+            {"entity_id": "ego", "location_x": 0, "location_y": 0, "heading_rad": 0, "is_ego": True},
+        ]
+        peds = [
+            {"entity_id": "ped_far", "entity_type": "Pedestrian",
+             "location_x": 60, "location_y": 0},
+        ]
+        decision = ef.select(vehicles, pedestrians=peds, frame_id=1)
+        assert decision.roi_pedestrians == []
+        assert len(decision.dropped_pedestrians) == 1
