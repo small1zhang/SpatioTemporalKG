@@ -4,6 +4,7 @@ from .roi import in_ego_ellipse
 from .generator import EgoCentricFilter, EgoRoiDecision
 from .lifecycle import LifecycleTracker
 from .importance import ImportanceScorer
+from .edge_pruner import EdgePruner
 
 __all__ = [
     "in_ego_ellipse",
@@ -11,4 +12,5 @@ __all__ = [
     "EgoRoiDecision",
     "LifecycleTracker",
     "ImportanceScorer",
+    "EdgePruner",
 ]
