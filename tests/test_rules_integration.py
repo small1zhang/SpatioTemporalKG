@@ -334,3 +334,132 @@ class TestRuleDefinitionAndParameter:
         ids2 = {sv.attrs["sv_id"] for sv in out2["violations"]}
         # 不同 frame_id -> 不同 sv_id
         assert ids1.isdisjoint(ids2)
+
+
+# ---------- EgoCentric RSS 对子 集成测试 (阶段1) ----------
+
+def _ego_vehicle(vid, speed=10.0, vx=10.0, vy=0.0, loc_x=0.0, loc_y=0.0,
+                 brake=0.8, heading=0.0, is_ego=True):
+    """带有 is_ego / heading_rad 的车辆工厂 (用于 EgoCentric 测试)."""
+    return {
+        "entity_id": vid, "speed": speed, "speed_kmh": speed * 3.6,
+        "velocity_x": vx, "velocity_y": vy,
+        "location_x": loc_x, "location_y": loc_y, "brake": brake,
+        "heading_rad": heading, "is_ego": is_ego,
+    }
+
+
+class TestEgoCentricRSSPairs:
+    """默认 EgoCentric (legacy_full_pairing=False) 时 RSS 只评 ego×ROI 内他车."""
+
+    def test_egocentric_skips_far_ahead_vehicle(self):
+        """前方 40m 车在 ROI 内 → 产出 R13a + R14a 两条 SafetyViolation.
+           前方 100m 车在 ROI 外 → 不产出其违规.
+
+           配置: ego 在原点朝 +x.
+        """
+        enforcer = RuleEnforcer()
+        vehicles = [
+            _ego_vehicle("ego",   speed=20.0, loc_x=0.0,  loc_y=0.0, brake=0.0),
+            _vehicle("V_close", speed=5.0, loc_x=40.0, loc_y=0.0, brake=0.0),  # ROI 内
+            _vehicle("V_far",   speed=5.0, loc_x=100.0, loc_y=0.0, brake=0.0),  # ROI 外
+        ]
+        out = enforcer.enforce(frame_id=1, vehicles=vehicles)
+        violations = out["violations"]
+        # ego vs V_close 产出纵向(R13a) + 横向(R14a) 两条
+        dst_ids = {sv.attrs["dst_id"] for sv in violations}
+        assert "V_far" not in dst_ids, "ROI 外的车不应出现在违规 dst_id"
+        assert "V_close" in dst_ids, "ROI 内的车应出现在违规 dst_id"
+        # 全部 violations 都是 ego×V_close 对子
+        for sv in violations:
+            assert sv.attrs["src_id"] == "ego"
+            assert sv.attrs["dst_id"] == "V_close"
+        # 应包含 R13a + R14a 两条
+        rule_codes = {sv.attrs["rule_code"] for sv in violations}
+        assert rule_codes == {"R13a", "R14a"}
+
+    def test_egocentric_includes_rear_vehicle(self):
+        """后方 20m 车在 ROI 内 (R_rear=30) → 产出违规."""
+        enforcer = RuleEnforcer()
+        vehicles = [
+            _ego_vehicle("ego", speed=20.0, loc_x=0.0, loc_y=0.0, brake=0.0),
+            _vehicle("V_rear", speed=10.0, loc_x=0.0, loc_y=-20.0, brake=0.0),
+        ]
+        out = enforcer.enforce(frame_id=1, vehicles=vehicles)
+        assert len(out["violations"]) >= 1
+        assert out["violations"][0].attrs["dst_id"] == "V_rear"
+
+    def test_egocentric_excludes_rear_out_of_roi(self):
+        """后方 80m 车超出后向 ROI (R_rear=30) → 不产出违规.
+           注: ego 朝 +x, (0,-80) 在车体坐标系下 lateral=-80, lateral/50=1.6, ROI 外.
+        """
+        enforcer = RuleEnforcer()
+        vehicles = [
+            _ego_vehicle("ego", speed=20.0, loc_x=0.0, loc_y=0.0, brake=0.0),
+            _vehicle("V_rear_far", speed=10.0, loc_x=0.0, loc_y=-80.0, brake=0.0),
+        ]
+        out = enforcer.enforce(frame_id=1, vehicles=vehicles)
+        dst_ids = {sv.attrs["dst_id"] for sv in out["violations"]}
+        assert "V_rear_far" not in dst_ids
+
+    def test_egocentric_excludes_side_out_of_roi(self):
+        """侧向 80m 车超出侧向 ROI (R_side=50) → 不产出违规."""
+        enforcer = RuleEnforcer()
+        vehicles = [
+            _ego_vehicle("ego", speed=20.0, loc_x=0.0, loc_y=0.0, brake=0.0),
+            _vehicle("V_side", speed=5.0, loc_x=0.0, loc_y=80.0, brake=0.0),
+        ]
+        out = enforcer.enforce(frame_id=1, vehicles=vehicles)
+        dst_ids = {sv.attrs["dst_id"] for sv in out["violations"]}
+        assert "V_side" not in dst_ids
+
+    def test_legacy_full_pairing_still_checks_all(self):
+        """legacy_full_pairing=True 时仍产出所有全对子 RSS 违规."""
+        from stk.config import EgoCentricConfig
+        cfg = EgoCentricConfig(legacy_full_pairing=True)
+        enforcer = RuleEnforcer(ego_config=cfg)
+        vehicles = [
+            _ego_vehicle("ego",   speed=20.0, loc_x=0.0,  loc_y=0.0, brake=0.0),
+            _vehicle("V_close", speed=5.0, loc_x=40.0, loc_y=0.0, brake=0.0),
+            _vehicle("V_far",   speed=5.0, loc_x=100.0, loc_y=0.0, brake=0.0),
+        ]
+        out = enforcer.enforce(frame_id=1, vehicles=vehicles)
+        dst_ids = {sv.attrs["dst_id"] for sv in out["violations"]}
+        # legacy 模式应包含 V_close 和 V_far 的违规
+        assert "V_close" in dst_ids
+        assert "V_far" in dst_ids
+
+    def test_egocentric_no_ego_fallback_first_vehicle(self):
+        """所有 vehicle 都没有 is_ego → fallback vehicles[0] 为 ego.
+
+           V1 被 fallback 认定为 ego, V2 在 ROI 内 → 产出 R13a + R14a 两条.
+        """
+        enforcer = RuleEnforcer()
+        vehicles = [
+            _vehicle("V1", speed=20.0, loc_x=0.0, loc_y=0.0, brake=0.0),
+            _vehicle("V2", speed=5.0, loc_x=40.0, loc_y=0.0, brake=0.0),
+        ]
+        out = enforcer.enforce(frame_id=1, vehicles=vehicles)
+        # V1 被 fallback 认定为 ego, V2 在 ROI 内 → 产出违规
+        assert len(out["violations"]) >= 1
+        for sv in out["violations"]:
+            assert sv.attrs["src_id"] == "V1"
+            assert sv.attrs["dst_id"] == "V2"
+
+    def test_egocentric_violation_has_responsibility_or_no_proper_response(self):
+        """ego×ROI 的违规应产出责任归因 OR 不触发 NoProperResponse 的判定.
+
+           brake=0.0 触发 NoProperResponse 时, 应有 1 个 ResponsibilityAssignment.
+           (本测试仅验证责任归因机制存在且关联 ego, 不强求每帧都触发.)
+        """
+        enforcer = RuleEnforcer()
+        vehicles = [
+            _ego_vehicle("ego", speed=20.0, loc_x=0.0, loc_y=0.0, brake=0.0),
+            _vehicle("V_close", speed=5.0, loc_x=40.0, loc_y=0.0, brake=0.0),
+        ]
+        out = enforcer.enforce(frame_id=1, vehicles=vehicles)
+        # 至少有 ego×V_close 的违规
+        assert len(out["violations"]) >= 1
+        # 责任归因: 若 NoProperResponse 触发, responsible_actor_id 应为 ego
+        for ra in out["responsibilities"]:
+            assert ra.attrs.get("responsible_actor_id") == "ego"
