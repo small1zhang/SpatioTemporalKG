@@ -1,0 +1,158 @@
+node {
+  diameter: 50px;
+  color: #68BDF6;
+  border-color: #5CA8DB;
+  caption: 'Test';
+  font-size: 10px;
+}
+node.Vehicle {
+  diameter: 60px;
+  color: #ef4444;
+  border-color: #b91c1c;
+  caption: '🚗\n{entity_id}';
+  font-size: 11px;
+}
+node.Pedestrian {
+  diameter: 40px;
+  color: #f59e0b;
+  border-color: #b45309;
+  caption: '🚶\n{entity_id}';
+}
+node.TrafficLight {
+  diameter: 35px;
+  color: #10b981;
+  border-color: #047857;
+  caption: '🚦\n{entity_id}';
+}
+node.RoadElement {
+  diameter: 30px;
+  color: #9ca3af;
+  border-color: #4b5563;
+  caption: '🛣\n{lane_id}';
+}
+node.Junction {
+  diameter: 35px;
+  color: #6366f1;
+  border-color: #4338ca;
+  caption: ' ⊹\n{junction_id}';
+}
+node.Maneuver {
+  diameter: 45px;
+  color: #f97316;
+  border-color: #c2410c;
+  caption: '📐\n{labels}';
+}
+node.InteractionEvent {
+  diameter: 40px;
+  color: #8b5cf6;
+  border-color: #6d28d9;
+  caption: '🤝\n{labels}';
+}
+node.BehaviorRelation {
+  diameter: 35px;
+  color: #ec4899;
+  border-color: #be185d;
+  caption: '🔗\n{relation_type}';
+}
+node.SafetyViolation {
+  diameter: 50px;
+  color: #dc2626;
+  border-color: #7f1d1d;
+  caption: '⚠\n{rule_code}';
+}
+node.ResponsibilityAssignment {
+  diameter: 45px;
+  color: #b91c1c;
+  border-color: #7f1d1d;
+  caption: '⚖\n{resp_id}';
+}
+node.Rule {
+  diameter: 40px;
+  color: #fbbf24;
+  border-color: #d97706;
+  border-width: 2px;
+  caption: '📘\n{rule_code}';
+}
+node.EnvironmentSnapshot {
+  diameter: 25px;
+  color: #94a3b8;
+  border-color: #475569;
+  caption: 'ENV\nf{frame_id}';
+}
+node.ScenarioSnapshot {
+  diameter: 40px;
+  color: #475569;
+  border-color: #1e293b;
+  caption: '🎬\n{entity_id}';
+}
+relationship {
+  color: #9ca3af;
+  caption: '{<type>}';
+  font-size: 9px;
+  arrow-size: 8px;
+  padding: 3px;
+}
+relationship.violates {
+  color: #dc2626;
+  caption: 'violates';
+  width: 3px;
+}
+relationship.responsibleFor {
+  color: #b91c1c;
+  caption: 'responsibleFor';
+  width: 3px;
+}
+relationship.in_lane {
+  color: #6b7280;
+  caption: 'in_lane';
+}
+relationship.ahead_of {
+  color: #3b82f6;
+  caption: 'ahead_of';
+}
+relationship.opposite_direction {
+  color: #ef4444;
+  caption: 'opposite_direction';
+  width: 2px;
+}
+relationship.overtaking {
+  color: #f97316;
+  caption: 'overtaking';
+  width: 2px;
+}
+relationship.has_maneuver {
+  color: #f97316;
+  caption: 'has_maneuver';
+}
+relationship.has_interaction {
+  color: #8b5cf6;
+  caption: 'has_interaction';
+}
+relationship.actor {
+  color: #8b5cf6;
+  caption: 'actor';
+}
+relationship.src {
+  color: #a78bfa;
+  caption: 'src';
+}
+relationship.dst {
+  color: #a78bfa;
+  caption: 'dst';
+}
+relationship.containsVehicle {
+  color: #475569;
+  caption: 'contains';
+}
+relationship.containsPedestrian {
+  color: #475569;
+  caption: 'contains';
+}
+relationship.containsTrafficLight {
+  color: #475569;
+  caption: 'contains';
+}
+relationship.containsRoad {
+  color: #475569;
+  caption: 'contains';
+}

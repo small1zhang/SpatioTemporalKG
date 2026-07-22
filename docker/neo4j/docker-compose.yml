@@ -1,0 +1,52 @@
+# SpatioTemporalKG · Neo4j (community edition, with APOC)
+#
+# 用法 (从仓库根目录):
+#   docker compose -f docker/neo4j/docker-compose.yml up -d
+#   # 等待 ~30s, 浏览器打开 http://localhost:7474
+#   # 账号/密码: neo4j / stk123  (与 config/neo4j.yaml 一致)
+#
+# 数据卷:
+#   ./data    — Neo4j 数据库文件 (持久化)
+#   ./logs    — Neo4j 日志
+#   ./import  — LOAD CSV / import 文件的默认目录 (可选)
+#
+# 关停:
+#   docker compose -f docker/neo4j/docker-compose.yml down
+#
+# 清空数据卷 (慎用, 不可逆):
+#   docker compose -f docker/neo4j/docker-compose.yml down -v
+
+services:
+  neo4j:
+    image: neo4j:5.20-community
+    container_name: stk-neo4j
+    ports:
+      - "7474:7474"   # HTTP Browser / REST
+      - "7687:7687"   # Bolt (Cypher 客户端)
+    environment:
+      # 认证 (与 config/neo4j.yaml 对齐; stk123 < 8 字符默认会被拒,这里放宽长度限制)
+      - NEO4J_AUTH=neo4j/stk123
+      - NEO4J_dbms_security_auth__minimum__password__length=4
+      # 自动安装 APOC (用于批量写入 / periodic.iterate 等)
+      - NEO4J_PLUGINS=["apoc"]
+      # 解除 apoc 配置限制
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use_neo4j_config=true
+      # 内存: 38 万边 + 1.4 万节点, 2GB heap 足够
+      - NEO4J_server_memory_heap_initial__size=1G
+      - NEO4J_server_memory_heap_max__size=2G
+      - NEO4J_server_memory_pagecache_size=1G
+      # 允许远程访问
+      - NEO4J_server_default__listen__address=0.0.0.0
+    volumes:
+      - ./data:/data
+      - ./logs:/logs
+      - ./import:/import
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
