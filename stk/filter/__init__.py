@@ -2,9 +2,11 @@
 
 from .roi import in_ego_ellipse
 from .generator import EgoCentricFilter, EgoRoiDecision
+from .lifecycle import LifecycleTracker
 
 __all__ = [
     "in_ego_ellipse",
     "EgoCentricFilter",
     "EgoRoiDecision",
+    "LifecycleTracker",
 ]
