@@ -103,25 +103,38 @@ class ThresholdConfig:
 
 @dataclass
 class EgoCentricConfig:
-    """以自车为中心的 ROI 过滤配置 (v3 §4.5, 阶段1).
+    """以自车为中心的 ROI 过滤配置 (v3 §4.5, 阶段2).
 
-    控制自车周围 ROI 椭圆的前/后/侧向半径，以及是否启用全对子向后兼容模式.
+    控制自车周围 ROI 椭圆的前/后/侧向半径，支持按类别差异化.
 
-    默认半径参考 nuScenes 类别半径 (car 50m, pedestrian 40m)
-    但取覆盖 car 类的保守值: 前 70m, 后 30m, 侧 50m.
-    类别差异化半径留待阶段 2.
+    保留 radius_front/rear/side 作为 fallback (向后兼容阶段1),
+    但优先从 radii_by_category[category] 读取对应类别的半径.
     """
 
     # 显式 ego_id (可选, 为空时自动从 is_ego / vehicles[0] 识别)
     ego_id_opt: Optional[str] = None
 
-    # ── 笛卡尔椭圆半径 ──
+    # ── 笛卡尔椭圆半径 (通用 fallback) ──
     radius_front: float = 70.0   # 前方半径 (m)
     radius_rear: float = 30.0    # 后方半径 (m)
     radius_side: float = 50.0    # 侧向半径 (m)
 
+    # ── 按类别差异化半径 (阶段2) ──
+    radii_by_category: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
+        "car":          {"front": 70.0, "rear": 30.0, "side": 50.0},
+        "bus_or_truck": {"front": 70.0, "rear": 30.0, "side": 50.0},
+        "motorcycle":   {"front": 50.0, "rear": 25.0, "side": 40.0},
+        "bicycle":      {"front": 50.0, "rear": 25.0, "side": 40.0},
+        "emergency":    {"front": 60.0, "rear": 30.0, "side": 50.0},
+        "pedestrian":   {"front": 40.0, "rear": 20.0, "side": 40.0},
+    })
+    pedestrian_radius_front: float = 40.0  # 行人前方半径快捷字段
+    pedestrian_radius_rear: float = 20.0   # 行人的后方半径
+    pedestrian_radius_side: float = 40.0   # 行人的侧向半径
+
     # ── 过滤行为 ──
-    hysteresis_frames: int = 3   # ENTER/EXIT 滞回帧数 (阶段 2 启用, 预留)
+    hysteresis_frames: int = 3   # ENTER/EXIT 滞回帧数
+    forget_frames: int = 30      # FORGET 过期帧数 (阶段2, 预留)
     legacy_full_pairing: bool = False
     """True: 退回到老的全对子 O(N²) 枚举 (向后兼容).
        False: 按 Ego x ROI 内他车做 RSS 对子."""
@@ -129,6 +142,26 @@ class EgoCentricConfig:
     # ── 行为层/场景层协同过滤开关 (阶段 2/3 启用, 预留) ──
     filter_behavior_detectors: bool = False
     filter_scene_spatial: bool = False
+
+    def _radii_for(self, entity: dict) -> tuple:
+        """返回给定 entity 的 (radius_front, radius_rear, radius_side).
+
+        优先级:
+          1. radii_by_category 匹配 (按 entity.get("vehicle_category") 或 entity_type)
+          2. pedestrian_radius_* (若 entity_type == "Pedestrian")
+          3. 通用 radius_front/rear/side (阶段1 fallback)
+        """
+        if entity.get("entity_type") == "Pedestrian":
+            return (self.pedestrian_radius_front,
+                    self.pedestrian_radius_rear,
+                    self.pedestrian_radius_side)
+        cat = entity.get("vehicle_category", "car")
+        radii = self.radii_by_category.get(cat)
+        if radii:
+            return (radii.get("front", self.radius_front),
+                    radii.get("rear", self.radius_rear),
+                    radii.get("side", self.radius_side))
+        return (self.radius_front, self.radius_rear, self.radius_side)
 
     @classmethod
     def default(cls) -> EgoCentricConfig:

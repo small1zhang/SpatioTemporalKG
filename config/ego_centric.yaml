@@ -4,15 +4,31 @@
 # 显式自车 entity_id (可选, 留空则自动从 is_ego 字段 / vehicles[0] 识别)
 ego_id_opt: ~
 
-# ── 笛卡尔椭圆半径 ──
+# ── 通用 fallback 椭圆半径 (向后兼容, 阶段1) ──
 radius_front: 70.0    # 前方半径 (m)
 radius_rear: 30.0     # 后方半径 (m)
 radius_side: 50.0     # 侧向半径 (m)
 
+# ── 按类别差异化半径 (阶段2) ──
+# 按目标 entity 的 vehicle_category 或 entity_type 查得半径
+radii_by_category:
+  car:          { front: 70.0, rear: 30.0, side: 50.0 }
+  bus_or_truck: { front: 70.0, rear: 30.0, side: 50.0 }
+  motorcycle:   { front: 50.0, rear: 25.0, side: 40.0 }
+  bicycle:      { front: 50.0, rear: 25.0, side: 40.0 }
+  emergency:    { front: 60.0, rear: 30.0, side: 50.0 }
+  pedestrian:   { front: 40.0, rear: 20.0, side: 40.0 }
+
+# ── 行人快捷半径 (entity_type=="Pedestrian" 时优先用) ──
+pedestrian_radius_front: 40.0
+pedestrian_radius_rear: 20.0
+pedestrian_radius_side: 40.0
+
 # ── 过滤行为 ──
-hysteresis_frames: 3   # 滞回帧数 (阶段 2 启用, 预留)
+hysteresis_frames: 3   # ENTER/EXIT 滞回帧数
+forget_frames: 30       # FORGET 过期帧数
 legacy_full_pairing: false  # true 时退回到全对子 O(N²) 枚举
 
-# ── 下游协同过滤开关 (阶段 2/3 启用, 预留) ──
+# ── 下游协同过滤开关 (阶段 2/3 启用) ──
 filter_behavior_detectors: false
 filter_scene_spatial: false

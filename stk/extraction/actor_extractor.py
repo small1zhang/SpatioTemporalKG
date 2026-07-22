@@ -4,6 +4,35 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 
+def _derive_vehicle_category(vehicle_type: str) -> str:
+    """从 CARLA vehicle type_id 派生 vehicle_category.
+
+    Returns 值: car, bicycle, motorcycle, bus_or_truck, emergency, truck_trailer.
+    不匹配时回退 "car".  用于按类别差异化 ROI 半径.
+    """
+    vt = vehicle_type.lower()
+    # Bicycle
+    if "gazelle" in vt or "bicycle" in vt or "bikehiker" in vt:
+        return "bicycle"
+    # Motorcycle
+    if any(kw in vt for kw in ("kawasaki", "harley", "yamaha", "vespa", "ninja")):
+        return "motorcycle"
+    # Bus
+    if "bus" in vt or "minivan" in vt or "microbus" in vt:
+        return "bus_or_truck"
+    # Truck / trailer
+    if any(kw in vt for kw in ("truck", "carlamotors", "carlacola", "box", "tractor", "semi", "trailer")):
+        return "bus_or_truck"
+    # Emergency
+    if any(kw in vt for kw in ("police", "ambulance", "fire", "swat")):
+        return "emergency"
+    # Van
+    if "van" in vt or "jeep" in vt or "suv" in vt or "landrover" in vt:
+        return "car"
+    # Default: car
+    return "car"
+
+
 def extract_vehicle(actor_data: dict) -> Dict[str, Any]:
     """从 CARLA Vehicle actor dict 提取."""
     loc = actor_data.get("location", {})
@@ -11,10 +40,12 @@ def extract_vehicle(actor_data: dict) -> Dict[str, Any]:
     acc = actor_data.get("acceleration", {})
     bbox = actor_data.get("bbox_extent", {})
     ctrl = actor_data.get("control", {})
+    vehicle_type = actor_data.get("type_id", "vehicle.*")
     return {
         "entity_id": actor_data.get("id", ""),
         "entity_type": "Vehicle",
-        "vehicle_type": actor_data.get("type_id", "vehicle.*"),
+        "vehicle_type": vehicle_type,
+        "vehicle_category": _derive_vehicle_category(vehicle_type),
         "is_ego": actor_data.get("is_ego", False),
         "location_x": loc.get("x", 0.0),
         "location_y": loc.get("y", 0.0),
