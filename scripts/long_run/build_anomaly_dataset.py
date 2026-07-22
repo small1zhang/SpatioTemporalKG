@@ -201,22 +201,49 @@ def load_phase5_graphs(run_dir: Path) -> Dict[int, List[Dict[str, Any]]]:
             if node.get("type") != "SafetyViolation":
                 continue
             attrs = node.get("attrs", {})
-            fid = attrs.get("frame_id")
-            if fid is None:
-                continue
-            sv_by_frame[int(fid)].append({
-                "sv_id":       attrs.get("sv_id") or node.get("id"),
-                "rule_code":   attrs.get("rule_code"),
-                "rule_layer":  attrs.get("rule_layer"),
-                "severity":    float(attrs.get("severity", 0.0)),
-                "src_id":      attrs.get("src_id"),
-                "dst_id":      attrs.get("dst_id"),
-                "fired_frames": attrs.get("fired_frames", []),
-                "first_frame": attrs.get("first_frame"),
-                "last_frame":  attrs.get("last_frame"),
-                "severity_max": attrs.get("severity_max"),
-                "fired_count": attrs.get("fired_count"),
-            })
+            sv_id      = attrs.get("sv_id") or node.get("id")
+            rule_code  = attrs.get("rule_code")
+            rule_layer = attrs.get("rule_layer")
+            src_id     = attrs.get("src_id")
+            dst_id     = attrs.get("dst_id")
+
+            # phase5 serialization 使用 coalesce/merge 模式:
+            # 节点无 per-frame frame_id，而是有 fired_frames 列表 + first/last_frame
+            # 需要展开: 每个 fired_frames 中的帧号都生成一条记录
+            fired = attrs.get("fired_frames", [])
+            if fired:
+                for fid in fired:
+                    fid_int = int(fid)
+                    sv_by_frame[fid_int].append({
+                        "sv_id":        sv_id,
+                        "rule_code":    rule_code,
+                        "rule_layer":   rule_layer,
+                        "severity":     float(attrs.get("severity_max", 0.0)),
+                        "src_id":       src_id,
+                        "dst_id":       dst_id,
+                        "fired_frames": fired,
+                        "first_frame":  attrs.get("first_frame"),
+                        "last_frame":   attrs.get("last_frame"),
+                        "severity_max": attrs.get("severity_max"),
+                        "fired_count":  attrs.get("fired_count"),
+                    })
+            else:
+                # 非 merge 模式, 用 first_frame 兜底
+                fid = attrs.get("first_frame") or attrs.get("frame_id")
+                if fid is not None:
+                    sv_by_frame[int(fid)].append({
+                        "sv_id":        sv_id,
+                        "rule_code":    rule_code,
+                        "rule_layer":   rule_layer,
+                        "severity":     float(attrs.get("severity", 0.0)),
+                        "src_id":       src_id,
+                        "dst_id":       dst_id,
+                        "fired_frames": [],
+                        "first_frame":  fid,
+                        "last_frame":   attrs.get("last_frame"),
+                        "severity_max": attrs.get("severity_max"),
+                        "fired_count":  1,
+                    })
     return sv_by_frame
 
 
