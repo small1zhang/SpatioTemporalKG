@@ -5,6 +5,7 @@ from .generator import EgoCentricFilter, EgoRoiDecision
 from .lifecycle import LifecycleTracker
 from .importance import ImportanceScorer
 from .edge_pruner import EdgePruner
+from .background_filter import BackgroundFilter
 
 __all__ = [
     "in_ego_ellipse",
@@ -13,4 +14,5 @@ __all__ = [
     "LifecycleTracker",
     "ImportanceScorer",
     "EdgePruner",
+    "BackgroundFilter",
 ]
