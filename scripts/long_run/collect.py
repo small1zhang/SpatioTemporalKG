@@ -128,6 +128,9 @@ def update_spectator_follow_ego(world, ego, carla_module,
     """
     carla = carla_module
     try:
+        if ego is None or not ego.is_alive:
+            print("  [spectator] ego is None or dead, skip")
+            return
         tf = ego.get_transform()
         # ego 朝向单位向量
         yaw_rad = math.radians(tf.rotation.yaw)
@@ -145,8 +148,16 @@ def update_spectator_follow_ego(world, ego, carla_module,
             pitch=-8.0,
         )
         world.get_spectator().set_transform(carla.Transform(cam_loc, cam_rot))
-    except Exception:
-        pass
+    except Exception as e:
+        # 不吞掉异常, 打印一次让用户能看到 (但每帧打印太烦, 用计数器)
+        global _spectator_err_count
+        if '_spectator_err_count' not in globals():
+            _spectator_err_count = 0
+        _spectator_err_count += 1
+        if _spectator_err_count <= 3:
+            print(f"  [spectator] follow err #{_spectator_err_count}: {e}")
+        elif _spectator_err_count == 4:
+            print(f"  [spectator] follow err reaching steady-state, suppressing further output")
 
 
 # ============================================================
@@ -258,7 +269,153 @@ def collect_waypoints(world, max_count: int = 2000) -> List[Dict[str, Any]]:
         return []
 
 
-# ------------- Checkpoint 写入 -------------
+# ==============================================================
+# 数据集多样性增强 (--weather-cycle / --density-ramp / --spawn-offset)
+# ==============================================================
+
+# 4 段天气档位: (cloudiness, precipitation, fog_density, sun_altitude_angle, wetness)
+WEATHER_PHASES = [
+    # clear (0-25%)
+    {"cloudiness": 5.0,  "precipitation": 0.0,  "fog_density": 2.0,
+     "sun_altitude_angle": 70.0, "wetness": 0.0},
+    # cloudy (25-50%)
+    {"cloudiness": 70.0, "precipitation": 0.0,  "fog_density": 8.0,
+     "sun_altitude_angle": 45.0, "wetness": 0.0},
+    # rain (50-75%)
+    {"cloudiness": 85.0, "precipitation": 60.0, "fog_density": 15.0,
+     "sun_altitude_angle": 25.0, "wetness": 60.0},
+    # night (75-100%)
+    {"cloudiness": 50.0, "precipitation": 0.0,  "fog_density": 5.0,
+     "sun_altitude_angle": -30.0, "wetness": 0.0},
+]
+
+
+def _interp_weather(t_frac: float) -> Dict[str, float]:
+    """根据 [0,1) 时间比例, 选段并线性插值天气参数.
+    4 段切换点: 0.0/0.25/0.5/0.75 ; 每段内部用 §上一档→下一档§ 线性插值,
+    让天气在段间也平缓变化, 避免突变撕裂知识图谱的 weather 上下文.
+    """
+    # 把 [0,1) 等分 4 段, 每段内做线性插值: WEATHER_PHASES[i] -> WEATHER_PHASES[i+1]
+    n_seg = len(WEATHER_PHASES) - 1
+    pos = min(max(t_frac, 0.0), 0.9999) * n_seg
+    i = min(int(pos), n_seg - 1)
+    local = pos - i
+    a, b = WEATHER_PHASES[i], WEATHER_PHASES[i + 1]
+    out = {}
+    for k in ("cloudiness", "precipitation", "fog_density",
+              "sun_altitude_angle", "wetness"):
+        out[k] = a[k] + (b[k] - a[k]) * local
+    # precipitation_deposits 与 wind_intensity 派生
+    out["precipitation_deposits"] = out["precipitation"] * 0.6
+    out["wind_intensity"] = 10.0 + 30.0 * (out["precipitation"] / 100.0)
+    return out
+
+
+def apply_weather_at_frame(world, carla_module, frame_id: int, total_frames: int) -> Dict[str, float]:
+    """根据当前帧 / 总帧数, 设置 CARLA 天气. 返回实际写入的天气 dict (供 chunk 记录)."""
+    carla = carla_module
+    t_frac = frame_id / max(total_frames, 1)
+    w = _interp_weather(t_frac)
+    try:
+        weather_params = carla.WeatherParameters(
+            cloudiness=w["cloudiness"],
+            precipitation=w["precipitation"],
+            precipitation_deposits=w["precipitation_deposits"],
+            wind_intensity=w["wind_intensity"],
+            sun_altitude_angle=w["sun_altitude_angle"],
+            fog_density=w["fog_density"],
+            wetness=w["wetness"],
+        )
+        world.set_weather(weather_params)
+    except Exception as e:
+        print(f"  [warn] set_weather failed @ frame {frame_id}: {e}")
+    return w
+
+
+# 3 段交通密度档位
+# (vehicles, walkers) 在不同时间段的 target 数量
+DENSITY_PHASES = [
+    (15, 6),   # 0-33%   稀疏
+    (25, 10),  # 33-67%  中等
+    (35, 15),  # 67-100% 稠密
+]
+
+
+def density_target_at_frame(frame_id: int, total_frames: int) -> Tuple[int, int]:
+    """根据帧号返回 (target_vehicles, target_walkers)."""
+    t_frac = frame_id / max(total_frames, 1)
+    if t_frac < 1.0 / 3.0:
+        return DENSITY_PHASES[0]
+    elif t_frac < 2.0 / 3.0:
+        return DENSITY_PHASES[1]
+    else:
+        return DENSITY_PHASES[2]
+
+
+def adjust_traffic_density(world, carla_module, bp_lib, map_,
+                            spawned_vehicles: List[Any],
+                            spawned_walkers: List[Tuple[Any, Any]],
+                            target_veh: int, target_ped: int,
+                            seed: int = 42) -> Tuple[List[Any], List[Tuple[Any, Any]]]:
+    """增量调整当前 actor 列表至 target 数量.
+    - 若现有多于 target: despawn 多余 (保留 ego=spawned_vehicles[0])
+    - 若现有少于 target: 用 spawn_vehicles/spawn_walkers 增补
+    返回更新后的 (spawned_vehicles, spawned_walkers) 列表.
+    """
+    carla = carla_module
+
+    # ----- vehicles -----
+    cur_veh = len(spawned_vehicles)
+    if cur_veh > target_veh:
+        # 反向遍历, despawn 多余的非 ego (ego 是 spawned_vehicles[0])
+        rm = cur_veh - target_veh
+        for v in reversed(spawned_vehicles[1:]):
+            if rm <= 0:
+                break
+            try:
+                v.destroy()
+                spawned_vehicles.remove(v)
+                rm -= 1
+            except Exception:
+                continue
+    elif cur_veh < target_veh:
+        add = target_veh - cur_veh
+        new_v = spawn_vehicles(world, add, bp_lib, map_, carla, seed=seed + cur_veh)
+        # 新 spawn 的车没 ego 标签 (spawn_vehicles 第一个才是 hero, 这里我们只要背景车)
+        # 修正: 把它们 role 改 autopilot (spawn_vehicles 在 n>=1 时把第一个当 hero, 不当 ego.
+        #       这里我们只要 add 个 background, 所以逐个 set_autopilot True 就可以.)
+        for v in new_v:
+            try: v.set_autopilot(True)
+            except Exception: pass
+        spawned_vehicles.extend(new_v)
+
+    # ----- walkers -----
+    cur_ped = len(spawned_walkers)
+    if cur_ped > target_ped:
+        rm = cur_ped - target_ped
+        for (w, ctl) in reversed(spawned_walkers):
+            if rm <= 0:
+                break
+            try:
+                if ctl is not None:
+                    ctl.stop()
+            except Exception:
+                pass
+            try:
+                w.destroy()
+                spawned_walkers.remove((w, ctl))
+                rm -= 1
+            except Exception:
+                continue
+    elif cur_ped < target_ped:
+        add = target_ped - cur_ped
+        new_w = spawn_walkers(world, add, bp_lib, carla, seed=seed + cur_ped + 1000)
+        spawned_walkers.extend(new_w)
+
+    return spawned_vehicles, spawned_walkers
+
+
+# ===============================================================
 
 def _write_checkpoint(run_dir: Path, frame: int, chunk_idx: int,
                        sched: EventScheduler,
@@ -303,6 +460,16 @@ def main():
     p.add_argument("--resume", default=None, help="从已有 run_dir 恢复 (含 collect_checkpoint.json)")
     p.add_argument("--checkpoint-interval", type=int, default=200,
                    help="每 N 帧写一次 checkpoint (默认 200 帧, 配合 chunk_frames)")
+    # ─── 数据集多样性增强选项 ───────────────────────────────────────────
+    p.add_argument("--weather-cycle", action="store_true",
+                   help="长跑期间分段变化天气 (clear→cloud→rain→night 四段, "
+                        "20min 跑分 0-25%%/25-50%%/50-75%%/75-100%% 切换)")
+    p.add_argument("--density-ramp", action="store_true",
+                   help="长跑期间分 3 段渐变交通密度 (稀→中→稠), "
+                        "在 chunk 边界按比例 spawn/despawn actor")
+    p.add_argument("--spawn-offset", type=int, default=0,
+                   help="ego 起始 spawn_point 偏移 (不同 run 用不同 offset 可换起点, "
+                        "0=沿用原 default 行为 (随机选), >0 则固定取第 offset 个 spawn_point")
     args = p.parse_args()
 
     # ------------- Resume 加载 -------------
@@ -404,14 +571,56 @@ def main():
 
     # spawn 交通 (resume 时也要重新 spawn — 因为 CARLA 重启了)
     print(f"[*] Spawning {args.vehicles} vehicles (first=ego=hero) ...")
-    spawned_vehicles = spawn_vehicles(world, args.vehicles, bp_lib, map_, carla, seed=args.seed)
-    ego = spawned_vehicles[0] if spawned_vehicles else None
+    if args.spawn_offset > 0:
+        # 用固定 spawn_point offset 给 ego, 不同 run 用不同 offset 可获得不同起位置
+        spawn_pts = map_.get_spawn_points()
+        if 0 < args.spawn_offset < len(spawn_pts):
+            # 自定义 spawn: ego 用 spawn_pts[spawn_offset], 其余用 spawn_vehicles 默认逻辑
+            vehicle_bps = bp_lib.filter("vehicle.*")
+            random.seed(args.seed)
+            ego_bp = random.choice(vehicle_bps)
+            ego_bp.set_attribute("role_name", "hero")
+            try:
+                ego = world.spawn_actor(ego_bp, spawn_pts[args.spawn_offset])
+                ego.set_autopilot(True)
+                spawned_vehicles = [ego] + spawn_vehicles(
+                    world, args.vehicles - 1, bp_lib, map_, carla, seed=args.seed)
+                print(f"[+] ego spawned at spawn_point[{args.spawn_offset}] "
+                      f"(offset mode)")
+            except RuntimeError as e:
+                print(f"[!] spawn_offset failed ({e}), fallback to default spawn")
+                spawned_vehicles = spawn_vehicles(world, args.vehicles, bp_lib,
+                                                   map_, carla, seed=args.seed)
+                ego = spawned_vehicles[0] if spawned_vehicles else None
+        else:
+            print(f"[!] spawn_offset={args.spawn_offset} 超出范围 "
+                  f"(spawn_points count={len(spawn_pts)}), fallback to default")
+            spawned_vehicles = spawn_vehicles(world, args.vehicles, bp_lib,
+                                               map_, carla, seed=args.seed)
+            ego = spawned_vehicles[0] if spawned_vehicles else None
+    else:
+        spawned_vehicles = spawn_vehicles(world, args.vehicles, bp_lib,
+                                           map_, carla, seed=args.seed)
+        ego = spawned_vehicles[0] if spawned_vehicles else None
     ego_id = ego.id if ego else None
     print(f"[+] ego_id={ego_id}, vehicles spawned={len(spawned_vehicles)}")
 
     print(f"[*] Spawning {args.walkers} walkers ...")
     spawned_walkers = spawn_walkers(world, args.walkers, bp_lib, carla, seed=args.seed)
     print(f"[+] walkers spawned={len(spawned_walkers)}")
+
+    # 数据集多样性提示
+    if args.weather_cycle:
+        print(f"[+] weather_cycle: ON (clear→cloud→rain→night 4 段插值, "
+              f"{args.total_frames / args.fps / 60:.1f} min)")
+    if args.density_ramp:
+        v1, w1 = DENSITY_PHASES[0]
+        v2, w2 = DENSITY_PHASES[1]
+        v3, w3 = DENSITY_PHASES[2]
+        print(f"[+] density_ramp: ON ({v1}v{w1}w → {v2}v{w2}w → {v3}v{w3}w 3 段, "
+              f"chunk 边界 spawn/despawn)")
+    if args.spawn_offset > 0:
+        print(f"[+] spawn_offset: {args.spawn_offset} (ego 起位置已偏移)")
 
     # ego 传感器
     sensor_events: List[Dict[str, Any]] = []
@@ -554,13 +763,17 @@ def main():
                     "affected_lane_ids": list(tl.get_affected_lane_id_list())
                                        if hasattr(tl, "get_affected_lane_id_list") else [],
                 })
-            weather_dict = {
-                "cloudiness": weather.cloudiness, "precipitation": weather.precipitation,
-                "precipitation_deposits": weather.precipitation_deposits,
-                "wind_intensity": weather.wind_intensity,
-                "sun_altitude_angle": weather.sun_altitude_angle,
-                "fog_density": weather.fog_density, "wetness": weather.wetness,
-            }
+            # 多样性: 天气循环 (每帧根据进度更新天气)
+            if args.weather_cycle:
+                weather_dict = apply_weather_at_frame(world, carla, i, args.total_frames)
+            else:
+                weather_dict = {
+                    "cloudiness": weather.cloudiness, "precipitation": weather.precipitation,
+                    "precipitation_deposits": weather.precipitation_deposits,
+                    "wind_intensity": weather.wind_intensity,
+                    "sun_altitude_angle": weather.sun_altitude_angle,
+                    "fog_density": weather.fog_density, "wetness": weather.wetness,
+                }
             frame_sensor_events = list(sensor_events)
             sensor_events.clear()
             for ev in frame_sensor_events:
@@ -587,6 +800,17 @@ def main():
                 # chunk 边界同步写 checkpoint
                 _write_checkpoint(run_dir, i, chunk_idx, sched, anomaly_log)
                 last_ckpt_frame = i
+
+                # 多样性: 密度渐变 (chunk 边界调整交通密度)
+                if args.density_ramp and i + 1 < args.total_frames:
+                    tv, tw = density_target_at_frame(i + 1, args.total_frames)
+                    spawned_vehicles, spawned_walkers = adjust_traffic_density(
+                        world, carla, bp_lib, map_,
+                        spawned_vehicles, spawned_walkers, tv, tw,
+                        seed=args.seed,
+                    )
+                    print(f"  [density] frame {i+1}: -> v={len(spawned_vehicles)}/"
+                          f"target={tv}, w={len(spawned_walkers)}/target={tw}")
 
             # 周期性 checkpoint (默认 200 帧一次, 比 chunk 边界更细)
             if (i - last_ckpt_frame) >= args.checkpoint_interval:

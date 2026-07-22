@@ -63,6 +63,12 @@ export CUDA_VISIBLE_DEVICES="$GPU_IDX"
 
 # ---------- 2. 参数派生 ----------
 MODE="${1:-smoke}"
+
+# 数据集多样性选项 (默认 full 启用, smoke / custom 不启用; 可被环境变量覆盖)
+WEATHER_CYCLE="${WEATHER_CYCLE:-}"
+DENSITY_RAMP="${DENSITY_RAMP:-}"
+SPAWN_OFFSET="${SPAWN_OFFSET:-0}"
+
 case "$MODE" in
     smoke)
         TOTAL_FRAMES=2400      # 2 min @ 20 fps
@@ -79,6 +85,9 @@ case "$MODE" in
         VEHICLES=30
         WALKERS=15
         TOWN=Town10HD
+        # full 模式默认开启多样性 (可被 WEATHER_CYCLE=0 / DENSITY_RAMP=0 关闭)
+        [ -z "$WEATHER_CYCLE" ] && WEATHER_CYCLE=1
+        [ -z "$DENSITY_RAMP"  ] && DENSITY_RAMP=1
         ;;
     custom)
         TOTAL_FRAMES="${2:-6000}"
@@ -88,24 +97,26 @@ case "$MODE" in
         WALKERS="${6:-12}"
         TOWN="${7:-Town10HD}"
         ;;
-    resume)
-        RUN_DIR="${2:?usage: $0 resume <run_dir>}"
-        # resume 模式: 不再创建新 run, 直接接续
-        echo "[run_long_run] resume $RUN_DIR"
-        "$CARLA_PYTHON" "$REPO/scripts/long_run/collect.py" \
-            --host "$CARLA_HOST" --port "$CARLA_PORT" \
-            --town "${TOWN:-Town10HD}" \
-            --total-frames "${TOTAL_FRAMES:-24000}" \
-            --chunk-frames "${CHUNK_FRAMES:-2000}" \
-            --density "${DENSITY:-2.0}" \
-            --seed 42 \
-            --vehicles "${VEHICLES:-30}" \
-            --walkers "${WALKERS:-15}" \
-            --fps 20.0 \
-            --out "$OUT_ROOT" \
-            --resume "$RUN_DIR"
-        exit $?
-        ;;
+	    resume)
+	        RUN_DIR="${2:?usage: $0 resume <run_dir>}"
+	        # resume 模式: 不再创建新 run, 直接接续
+	        echo "[run_long_run] resume $RUN_DIR"
+	        "$CARLA_PYTHON" "$REPO/scripts/long_run/collect.py" \
+	            --host "$CARLA_HOST" --port "$CARLA_PORT" \
+	            --town "${TOWN:-Town10HD}" \
+	            --total-frames "${TOTAL_FRAMES:-24000}" \
+	            --chunk-frames "${CHUNK_FRAMES:-2000}" \
+	            --density "${DENSITY:-2.0}" \
+	            --seed 42 \
+	            --vehicles "${VEHICLES:-30}" \
+	            --walkers "${WALKERS:-15}" \
+	            --fps 20.0 \
+	            --out "$OUT_ROOT" \
+	            --resume "$RUN_DIR" \
+	            $([ "$WEATHER_CYCLE" = "1" ] && echo --weather-cycle) \
+	            $([ "$DENSITY_RAMP" = "1" ] && echo --density-ramp)
+	        exit $?
+	        ;;
     pipeline)
         RUN_DIR="${2:?usage: $0 pipeline <run_dir>}"
         echo "[run_long_run] pipeline-only on $RUN_DIR"
@@ -164,6 +175,9 @@ echo
     --fps 20.0 \
     --out "$OUT_ROOT" \
     --checkpoint-interval 200 \
+    $([ "$WEATHER_CYCLE" = "1" ] && echo --weather-cycle) \
+    $([ "$DENSITY_RAMP" = "1" ] && echo --density-ramp) \
+    $( [ "${SPAWN_OFFSET:-0}" != "0" ] && echo --spawn-offset "$SPAWN_OFFSET" ) \
     2>&1 | tee "$LOG_FILE"
 
 # 抓最新生成的 run_dir
