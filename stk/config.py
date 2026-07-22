@@ -99,3 +99,52 @@ class ThresholdConfig:
         cfg = cls()
         cfg.update_from(d)
         return cfg
+
+
+@dataclass
+class EgoCentricConfig:
+    """以自车为中心的 ROI 过滤配置 (v3 §4.5, 阶段1).
+
+    控制自车周围 ROI 椭圆的前/后/侧向半径，以及是否启用全对子向后兼容模式.
+
+    默认半径参考 nuScenes 类别半径 (car 50m, pedestrian 40m)
+    但取覆盖 car 类的保守值: 前 70m, 后 30m, 侧 50m.
+    类别差异化半径留待阶段 2.
+    """
+
+    # 显式 ego_id (可选, 为空时自动从 is_ego / vehicles[0] 识别)
+    ego_id_opt: Optional[str] = None
+
+    # ── 笛卡尔椭圆半径 ──
+    radius_front: float = 70.0   # 前方半径 (m)
+    radius_rear: float = 30.0    # 后方半径 (m)
+    radius_side: float = 50.0    # 侧向半径 (m)
+
+    # ── 过滤行为 ──
+    hysteresis_frames: int = 3   # ENTER/EXIT 滞回帧数 (阶段 2 启用, 预留)
+    legacy_full_pairing: bool = False
+    """True: 退回到老的全对子 O(N²) 枚举 (向后兼容).
+       False: 按 Ego x ROI 内他车做 RSS 对子."""
+
+    # ── 行为层/场景层协同过滤开关 (阶段 2/3 启用, 预留) ──
+    filter_behavior_detectors: bool = False
+    filter_scene_spatial: bool = False
+
+    @classmethod
+    def default(cls) -> EgoCentricConfig:
+        return cls()
+
+    def to_dict(self) -> dict:
+        import dataclasses
+        return dataclasses.asdict(self)
+
+    def update_from(self, d: dict) -> None:
+        for k, v in d.items():
+            if hasattr(self, k):
+                setattr(self, k, v)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> EgoCentricConfig:
+        cfg = cls()
+        cfg.update_from(d)
+        return cfg

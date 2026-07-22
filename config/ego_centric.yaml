@@ -1,0 +1,18 @@
+# EgoCentric ROI 过滤配置 (v3 §4.5)
+# 自车中心笛卡尔椭圆 ROI 参数
+
+# 显式自车 entity_id (可选, 留空则自动从 is_ego 字段 / vehicles[0] 识别)
+ego_id_opt: ~
+
+# ── 笛卡尔椭圆半径 ──
+radius_front: 70.0    # 前方半径 (m)
+radius_rear: 30.0     # 后方半径 (m)
+radius_side: 50.0     # 侧向半径 (m)
+
+# ── 过滤行为 ──
+hysteresis_frames: 3   # 滞回帧数 (阶段 2 启用, 预留)
+legacy_full_pairing: false  # true 时退回到全对子 O(N²) 枚举
+
+# ── 下游协同过滤开关 (阶段 2/3 启用, 预留) ──
+filter_behavior_detectors: false
+filter_scene_spatial: false
