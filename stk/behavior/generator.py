@@ -23,6 +23,8 @@ BehaviorRelationGenerator.generate() 输出符合 v3 sec 7.3.2 流水线契约:
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
+from stk.config import EgoCentricConfig
+from stk.filter import EgoCentricFilter
 from stk.ontology.relation import BaseRelation
 from stk.ontology.types import BehaviorRelationType
 from stk.behavior.nodes import (
@@ -48,6 +50,11 @@ INTERACTION_RELS = {
     "wrong_side_meeting", "opposite_direction", "same_direction",
     "blocked_view", "approaching_pedestrian",
     "approaching_intersection", "crossing",
+}
+
+# 车辆-车辆对子交互 (FE-6 做 ego 化)
+_VEHICLE_VEHICLE_RELS = {
+    "following", "overtaking", "opposite_direction", "blocked_view",
 }
 
 
@@ -80,7 +87,8 @@ class BehaviorRelationGenerator:
 
     def __init__(self,
                  debouncer: Optional[RelationDebouncer] = None,
-                 thresholds: Optional[Dict[str, int]] = None):
+                 thresholds: Optional[Dict[str, int]] = None,
+                 ego_config: Optional[EgoCentricConfig] = None):
         self._debouncer = debouncer or RelationDebouncer(thresholds=thresholds)
         self._active_nodes: Dict[Tuple[str, str, str], Any] = {}
         self._active_rels: Dict[Tuple[str, str, str], BaseRelation] = {}
@@ -89,6 +97,14 @@ class BehaviorRelationGenerator:
         self._nodes_emitted: List[Any] = []
         self._relations_emitted: List[BaseRelation] = []
         self._cross_layer_emitted: List[BaseRelation] = []
+
+        # 阶段2: EgoCentric ROI 过滤 (对车辆-车辆对子)
+        self._ego_config = ego_config or EgoCentricConfig.default()
+        _enabled = (
+            self._ego_config.filter_behavior_detectors
+            and not self._ego_config.legacy_full_pairing
+        )
+        self._ego_filter = EgoCentricFilter(self._ego_config) if _enabled else None
 
     # ---------------- 公共 API ----------------
 
@@ -125,6 +141,22 @@ class BehaviorRelationGenerator:
             traffic_lights=traffic_lights, junctions=junctions,
             crosswalks=crosswalks, scene_relations=scene_relations,
         )
+
+        # FE-6: ego×ROI 对车辆-车辆对子候选做过滤
+        # 仅对 _VEHICLE_VEHICLE_RELS 中的对子类, 保留 ego 参与的;
+        # 其它 (个体行为 / 车-人 / 车-灯 / junction / crosswalk) 不动.
+        if self._ego_filter is not None:
+            decision = self._ego_filter.select(vehicles, frame_id=frame_id)
+            ego_id = decision.ego.get("entity_id", "") if decision.ego else ""
+            if ego_id:
+                roi_ids = {v.get("entity_id", "") for v in decision.roi_targets}
+                for rel_type in _VEHICLE_VEHICLE_RELS:
+                    items = candidates.get(rel_type, [])
+                    candidates[rel_type] = [
+                        (s, d, c, e) for (s, d, c, e) in items
+                        if s == ego_id or d == ego_id
+                        or (s in roi_ids and d in roi_ids)
+                    ]
 
         new_maneuvers: List[ManeuverNode] = []
         new_interactions: List[InteractionEvent] = []
