@@ -97,15 +97,24 @@ def compute_in_lane(vehicles: List, lanes: List[Dict], frame_id: int,
 
 
 def compute_ahead_of(vehicles: List, frame_id: int,
-                 lateral_max: Optional[float] = None) -> List[BaseRelation]:
-    """AheadOf: 同车道后车→前车 (v3 §2.9.2)。
+                 lateral_max: Optional[float] = None,
+                 ego_id: Optional[str] = None) -> List[BaseRelation]:
+    """AheadOf: 同车道后车→前车 (v3 §2.9.2).
 
-    判断条件：is_in_same_lane(v, w) 且 longitudinal_distance(v, w) > 0。
+    判断条件：is_in_same_lane(v, w) 且 longitudinal_distance(v, w) > 0.
+
+    Args:
+        ego_id: 阶段2 ego×ROI 模式. 若传入则只生成 ego 参与的 ahead_of 对子;
+                否则全枚举 (向后兼容).
     """
     results: List[BaseRelation] = []
     for v in vehicles:
+        if ego_id is not None and getattr(v, "entity_id", "") != ego_id:
+            continue
         for w in vehicles:
             if v.entity_id == w.entity_id:
+                continue
+            if ego_id is not None and getattr(w, "entity_id", "") == ego_id:
                 continue
             loc_v = _location(v)
             loc_w = _location(w)
@@ -125,13 +134,24 @@ def compute_ahead_of(vehicles: List, frame_id: int,
 
 def compute_beside(vehicles: List, frame_id: int,
                lateral_max: Optional[float] = None,
-               longitudinal_max: Optional[float] = None) -> List[BaseRelation]:
-    """Beside: 并排 (v3 §2.9.2) |lateral| < 3m, |longitudinal| < 5m。"""
+               longitudinal_max: Optional[float] = None,
+               ego_id: Optional[str] = None) -> List[BaseRelation]:
+    """Beside: 并排 (v3 §2.9.2) |lateral| < 3m, |longitudinal| < 5m.
+
+    Args:
+        ego_id: 阶段2 ego×ROI 模式. 若传入则只生成 ego 参与的 beside 对子.
+    """
     results: List[BaseRelation] = []
     for v in vehicles:
+        if ego_id is not None and getattr(v, "entity_id", "") != ego_id:
+            continue
         for w in vehicles:
-            if v.entity_id >= w.entity_id:
+            if v.entity_id == w.entity_id:
                 continue
+            if ego_id is None and v.entity_id >= w.entity_id:
+                continue  # 全枚举模式下避免重复对
+            if ego_id is not None and getattr(w, "entity_id", "") == ego_id:
+                continue  # ego 模式下不与自身配对
             loc_v = _location(v)
             loc_w = _location(w)
             if loc_v is None or loc_w is None:
@@ -149,11 +169,19 @@ def compute_beside(vehicles: List, frame_id: int,
     return results
 
 
-def compute_nearby_pedestrian(vehicles: List, pedestrians: List, frame_id: int, threshold: Optional[float] = None) -> List[BaseRelation]:
-    """NearbyPedestrian: 车辆附近行人 (v3 §2.9.2) distance < 20m。"""
+def compute_nearby_pedestrian(vehicles: List, pedestrians: List, frame_id: int,
+                              threshold: Optional[float] = None,
+                              ego_id: Optional[str] = None) -> List[BaseRelation]:
+    """NearbyPedestrian: 车辆附近行人 (v3 §2.9.2) distance < 20m.
+
+    Args:
+        ego_id: 阶段2 ego×ROI 模式. 若传入则只为 ego 计算附近行人.
+    """
     results: List[BaseRelation] = []
     _thr = threshold if threshold is not None else _THRESHOLDS.nearby_pedestrian_max
     for v in vehicles:
+        if ego_id is not None and getattr(v, "entity_id", "") != ego_id:
+            continue
         loc_v = _location(v)
         if loc_v is None:
             continue
