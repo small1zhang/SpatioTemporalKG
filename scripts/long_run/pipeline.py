@@ -92,6 +92,8 @@ def process_chunks(
     neo4j_config: Optional[Dict[str, Any]] = None,
     out_dir: Path = None,
     checkpoint_path: Optional[Path] = None,
+    shard_frames: Optional[int] = None,
+    coalesce_containment: bool = True,
 ):
     """跨分块执行 Phase2→3→4→5.
 
@@ -104,13 +106,15 @@ def process_chunks(
         neo4j_config: {host, port, user, password}, None=只输出 JSON
         out_dir: phase5 输出目录
         checkpoint_path: pipeline checkpoint 路径 (若有则从中恢复, 也定期写入)
+        shard_frames: Phase5 分片帧数 (None=单文件模式, 向后兼容)
+        coalesce_containment: 是否启用边压缩 (默认 True, --no-coalesce 时禁用)
 
     核心设计:
       → Phase1 已由 collect.py 完成.
       → Phase2-5 在 chunk 循环外部建立状态, 跨 chunk 不停.
         - BehaviorRelationGenerator (含防抖) 持续
         - IncrementalEngine (delta) 持续
-      → 输出: phase5_graph.json (完整图) + 写入 Neo4j (若配置)
+      → 输出: phase5_graph.json (单文件, 默认) 或 graph_XXXX_<start>_<end>.json 分片 (--shard-frames)
       → checkpoint 支持: 每个 chunk 处理完写一次 pipeline_checkpoint.json,
         下次重启时跨 chunk 累积容器 + 引擎状态全部恢复.
     """
@@ -399,61 +403,137 @@ def process_chunks(
     banner("Phase 5: Storage & graph output")
     t0 = time.time()
 
-    print(f"[*] phase2 frames streaming from {tmp_phase2.name}")
-    phase2_iter = []
+    # 把 jsonl 临时文件读回内存 (frame dict 本身不大，大的是边)
+    all_frames: list = []
     if tmp_phase2 and tmp_phase2.exists():
-        def _stream(p):
-            with open(p, "r", encoding="utf-8") as fp:
-                for line in fp:
-                    line = line.strip()
-                    if line:
-                        yield json.loads(line)
-        phase2_iter = _stream(tmp_phase2)
         with open(tmp_phase2, "r", encoding="utf-8") as fp:
-            n_phase2_lines = sum(1 for _ in fp)
-        print(f"[+] phase2 frames on disk: {n_phase2_lines}")
+            for line in fp:
+                line = line.strip()
+                if line:
+                    all_frames.append(json.loads(line))
+        print(f"[+] phase2 frames loaded: {len(all_frames)}")
 
     print(f"[+] in-memory: maneu={len(all_maneuvers_raw)} inter={len(all_interactions_raw)} "
           f"beh={len(all_behavior_rels_raw)} cross={len(all_cross_layer_rels_raw)} rule_out={len(all_ruleouts_raw)}")
+    print(f"[+] output mode: shard_frames={shard_frames}, coalesce={coalesce_containment}")
 
-    graph_obj = serialize_graph(
-        phase2_iter, with_relations=True,
-        maneuvers=all_maneuvers_raw,
-        interactions=all_interactions_raw,
-        behavior_rels=all_behavior_rels_raw,
-        cross_layer_rels=all_cross_layer_rels_raw,
-        rule_out=all_ruleouts_raw,
-    )
-    g_nodes = len(graph_obj.get("nodes", []))
-    g_edges = len(graph_obj.get("edges", []))
-    type_counts = Counter(n["type"] for n in graph_obj.get("nodes", []))
-    edge_type_counts = Counter(e["type"] for e in graph_obj.get("edges", []))
+    shard_use = shard_frames is not None and shard_frames > 0
+    all_shard_infos: list = []
+    total_nodes = 0
+    total_edges_g = 0
 
-    print(f"[+] serialize_graph: nodes={g_nodes} edges={g_edges}")
-    print(f"[+] node types: {dict(type_counts)}")
-    print(f"[+] edge types: {dict(edge_type_counts)}")
+    # ---- 分片序列化 (shard mode) ----
+    if shard_use:
+        for start_idx in range(0, len(all_frames), shard_frames):
+            shard_data = all_frames[start_idx:start_idx + shard_frames]
+            if not shard_data:
+                continue
+            f_start = shard_data[0]["frame_id"]
+            f_end = shard_data[-1]["frame_id"]
+            print(f"\n[shard] frames {f_start}..{f_end} ({len(shard_data)} frames)")
 
-    # 输出
-    if out_dir:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        graph_path = out_dir / "phase5_graph.json"
-        with open(graph_path, "w", encoding="utf-8") as f:
-            json.dump(graph_obj, f, ensure_ascii=False, indent=2, default=str)
-        sz = graph_path.stat().st_size / (1024 * 1024)
-        print(f"[+] graph saved: {graph_path} ({sz:.1f} MB)")
+            graph_obj = serialize_graph(
+                shard_data, with_relations=True,
+                maneuvers=all_maneuvers_raw,
+                interactions=all_interactions_raw,
+                behavior_rels=all_behavior_rels_raw,
+                cross_layer_rels=all_cross_layer_rels_raw,
+                rule_out=all_ruleouts_raw,
+                coalesce_containment=coalesce_containment,
+            )
+            n_nodes = len(graph_obj.get("nodes", []))
+            n_edges = len(graph_obj.get("edges", []))
+            total_nodes += n_nodes
+            total_edges_g += n_edges
+            shard_info = {
+                "shard_idx": len(all_shard_infos) + 1,
+                "frame_start": f_start, "frame_end": f_end,
+                "frame_count": len(shard_data),
+                "graph_nodes": n_nodes, "graph_edges": n_edges,
+            }
+            all_shard_infos.append(shard_info)
+            print(f"  nodes={n_nodes} edges={n_edges}")
+
+            if out_dir:
+                out_dir.mkdir(parents=True, exist_ok=True)
+                graph_path = out_dir / f"graph_{shard_info['shard_idx']:04d}_{f_start}_{f_end}.json"
+                with open(graph_path, "w", encoding="utf-8") as f:
+                    json.dump(graph_obj, f, ensure_ascii=False, indent=2, default=str)
+                sz = graph_path.stat().st_size / (1024 * 1024)
+                print(f"  saved: {graph_path.name} ({sz:.1f} MB)")
 
         summary = {
-            "total_frames": total_frames, "chunks_processed": len(chunks),
-            "graph_nodes": g_nodes, "graph_edges": g_edges,
-            "node_types": dict(type_counts), "edge_types": dict(edge_type_counts),
+            "output_mode": "sharded",
+            "coalesce_containment": coalesce_containment,
+            "shard_frames": shard_frames,
+            "total_frames": total_frames,
+            "chunks_processed": len(chunks),
+            "n_shards": len(all_shard_infos),
+            "total_graph_nodes": total_nodes,
+            "total_graph_edges": total_edges_g,
+            "shards": all_shard_infos,
             "engine_n_deltas": engine.n_deltas,
         }
-        summary_path = out_dir / "phase5_kg_summary.json"
-        with open(summary_path, "w", encoding="utf-8") as f:
-            json.dump(summary, f, ensure_ascii=False, indent=2)
-        print(f"[+] summary saved: {summary_path}")
+        if out_dir:
+            summary_path = out_dir / "phase5_kg_summary.json"
+            with open(summary_path, "w", encoding="utf-8") as f:
+                json.dump(summary, f, ensure_ascii=False, indent=2)
+            print(f"[+] summary saved: {summary_path} (n_shards={len(all_shard_infos)})")
 
-        # 清理临时文件
+    # ---- 原单文件模式 (向后兼容) ----
+    else:
+        graph_obj = serialize_graph(
+            all_frames, with_relations=True,
+            maneuvers=all_maneuvers_raw,
+            interactions=all_interactions_raw,
+            behavior_rels=all_behavior_rels_raw,
+            cross_layer_rels=all_cross_layer_rels_raw,
+            rule_out=all_ruleouts_raw,
+            coalesce_containment=coalesce_containment,
+        )
+        g_nodes = len(graph_obj.get("nodes", []))
+        g_edges = len(graph_obj.get("edges", []))
+        total_nodes = g_nodes
+        total_edges_g = g_edges
+        type_counts = Counter(n["type"] for n in graph_obj.get("nodes", []))
+        edge_type_counts = Counter(e["type"] for e in graph_obj.get("edges", []))
+
+        print(f"[+] serialize_graph: nodes={g_nodes} edges={g_edges}")
+        print(f"[+] node types: {dict(type_counts)}")
+        print(f"[+] edge types: {dict(edge_type_counts)}")
+
+        if out_dir:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            graph_path = out_dir / "phase5_graph.json"
+            with open(graph_path, "w", encoding="utf-8") as f:
+                json.dump(graph_obj, f, ensure_ascii=False, indent=2, default=str)
+            sz = graph_path.stat().st_size / (1024 * 1024)
+            print(f"[+] graph saved: {graph_path} ({sz:.1f} MB)")
+
+            summary = {
+                "output_mode": "single",
+                "coalesce_containment": coalesce_containment,
+                "total_frames": total_frames, "chunks_processed": len(chunks),
+                "graph_nodes": g_nodes, "graph_edges": g_edges,
+                "node_types": dict(type_counts), "edge_types": dict(edge_type_counts),
+                "engine_n_deltas": engine.n_deltas,
+            }
+            summary_path = out_dir / "phase5_kg_summary.json"
+            with open(summary_path, "w", encoding="utf-8") as f:
+                json.dump(summary, f, ensure_ascii=False, indent=2)
+            print(f"[+] summary saved: {summary_path}")
+
+        # 若配置了 Neo4j, 写入 (仅在单文件模式写一次)
+        if neo4j_config:
+            try:
+                _write_to_neo4j(graph_obj, neo4j_config, out_dir)
+            except Exception as e:
+                print(f"[!] Neo4j write failed: {e}")
+        else:
+            print("[*] Neo4j not configured. SKIP.")
+
+    # 清理临时文件
+    if out_dir:
         try:
             for p in (tmp_phase2,):
                 if p and p.exists():
@@ -462,17 +542,8 @@ def process_chunks(
         except Exception:
             pass
 
-    # 若配置了 Neo4j, 写入
-    if neo4j_config:
-        try:
-            _write_to_neo4j(graph_obj, neo4j_config, out_dir)
-        except Exception as e:
-            print(f"[!] Neo4j write failed: {e}")
-    else:
-        print("[*] Neo4j not configured. SKIP.")
-
     tim = time.time() - t0
-    print(f"[OK] Phase5 done ({tim:.1f}s)")
+    print(f"[OK] Phase5 done ({tim:.1f}s) total_nodes={total_nodes} total_edges={total_edges_g}")
 
 
 # ------------- Pipeline Checkpoint -------------
@@ -528,6 +599,13 @@ def main():
     p.add_argument("--out", default=None, help="输出目录 (默认 = run_dir/phase5)")
     p.add_argument("--no-resume", action="store_true",
                    help="忽略已有 pipeline_checkpoint.json, 从头处理所有 chunk")
+    # Phase5 输出优化 (long-run ≥20min 数据用)
+    p.add_argument("--shard-frames", type=int, default=None,
+                   help="Phase5 按时间窗口分片输出 (每 N 帧一个 graph_XXXX_<start>_<end>.json). "
+                        "不指定则保持原单文件 phase5_graph.json 行为 (向后兼容)")
+    p.add_argument("--no-coalesce", action="store_true",
+                   help="禁用边合并 (默认开启 coalesce_containment 以压缩 containsXXX 等冗余边). "
+                        "禁用后退回逐帧 scenario_frame_F + 逐帧包含边的老行为")
     args = p.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -565,6 +643,8 @@ def main():
         seed=args.seed, neo4j_config=neo4j_config,
         out_dir=out_dir,
         checkpoint_path=checkpoint_path,
+        shard_frames=args.shard_frames,
+        coalesce_containment=not args.no_coalesce,
     )
 
     print("\n[OK] Pipeline done.")

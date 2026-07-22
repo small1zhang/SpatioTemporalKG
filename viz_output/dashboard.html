@@ -65,26 +65,26 @@ button.sm{padding:4px 10px;font-size:11px}
 
 <div class="header">
   <h1>🌐 SpatioTemporalKG 时空动态知识图谱</h1>
-  <p>5 地图 × 14 场景 = 70 采集任务 · CARLA 0.9.16 · 5 阶段提取管线</p>
+  <p id="header-sub">5min CARLA 采集 · Phase5 分片输出 · CARLA 0.9.16 · 5 阶段提取管线</p>
 </div>
 <div class="tabs">
   <div class="tab active" onclick="switchTab('overview')">📊 总览</div>
-  <div class="tab" onclick="switchTab('heatmap')">🗺️ 热力图</div>
   <div class="tab" onclick="switchTab('kg')">🕸️ 知识图谱</div>
-  <div class="tab" onclick="switchTab('trajectory')">🚗 轨迹动画</div>
-  <div class="tab" onclick="switchTab('comparison')">📈 对比分析</div>
+  <div class="tab" onclick="switchTab('heatmap')" id="tab-heatmap">🗺️ 热力图</div>
+  <div class="tab" onclick="switchTab('trajectory')" id="tab-trajectory">🚗 轨迹动画</div>
+  <div class="tab" onclick="switchTab('comparison')" id="tab-comparison">📈 对比分析</div>
 </div>
 
 <!-- 总览 -->
 <div id="panel-overview" class="panel active">
   <div class="cards" id="summary-cards"></div>
   <div class="chart-row">
-    <div class="chart-box"><h3>各地图平均节点/边数</h3><div id="chart-map-stats"></div></div>
-    <div class="chart-box"><h3>各场景平均节点数</h3><div id="chart-scenario-stats"></div></div>
+    <div class="chart-box"><h3 id="overview-chart1-title">各地图平均节点/边数</h3><div id="chart-map-stats"></div></div>
+    <div class="chart-box"><h3 id="overview-chart2-title">各场景平均节点数</h3><div id="chart-scenario-stats"></div></div>
   </div>
   <div class="chart-row">
-    <div class="chart-box"><h3>采集耗时分布</h3><div id="chart-time-dist"></div></div>
-    <div class="chart-box"><h3>场景分组统计</h3><div id="chart-tier-pie"></div></div>
+    <div class="chart-box"><h3 id="overview-chart3-title">采集耗时分布</h3><div id="chart-time-dist"></div></div>
+    <div class="chart-box"><h3 id="overview-chart4-title">场景分组统计</h3><div id="chart-tier-pie"></div></div>
   </div>
 </div>
 
@@ -99,8 +99,7 @@ button.sm{padding:4px 10px;font-size:11px}
 <!-- 知识图谱 -->
 <div id="panel-kg" class="panel">
   <div class="controls">
-    <label>地图 <select id="kg-map"></select></label>
-    <label>场景 <select id="kg-scenario"></select></label>
+    <label>分片 <select id="kg-shard-select" onchange="switchShard()"><option value="">加载中...</option></select></label>
     <button class="primary" onclick="loadKG()">🔍 加载图谱</button>
     <button onclick="resetKGView()">↺ 重置视图</button>
     <button onclick="exportKG()">📥 导出子图</button>
@@ -110,10 +109,18 @@ button.sm{padding:4px 10px;font-size:11px}
     <!-- 左侧: 过滤器 -->
     <div class="kg-sidebar" id="kg-sidebar">
       <h4>🔎 子图查询</h4>
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px;color:var(--text2);font-size:12px;cursor:pointer">
+        <input type="checkbox" id="kg-simplify" checked onchange="toggleSimplify()"> 🧹 简约模式 (隐藏批量噪音)
+      </label>
       <input type="text" id="kg-search" placeholder="搜索节点 ID / 类型..." oninput="filterKG()">
       <div style="margin-top:6px">
         <button class="sm" onclick="selectAllTypes()">全选</button>
         <button class="sm" onclick="selectNoTypes()">清除</button>
+      </div>
+      <h4>⏱️ 帧范围</h4>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="range" id="kg-frame-from" min="0" max="1999" value="0" step="100" style="flex:1" oninput="onFrameRangeChange()">
+        <span id="kg-frame-label" style="font-size:11px;color:var(--text2);min-width:80px;text-align:right">0-1999</span>
       </div>
       <h4>📦 节点类型</h4>
       <div id="kg-type-filters"></div>
@@ -128,6 +135,10 @@ button.sm{padding:4px 10px;font-size:11px}
     <div class="kg-detail" id="kg-detail">
       <h4>📋 节点详情</h4>
       <div id="kg-detail-content" style="color:var(--text2)">点击节点查看详情</div>
+      <div style="margin:8px 0;display:flex;gap:4px">
+        <button class="sm" id="btn-focus-node" onclick="focusOnNode()" style="display:none;background:var(--accent)">🎯 聚焦 1 跳邻居</button>
+        <button class="sm" id="btn-focus-clear" onclick="clearFocus()" style="display:none">✕ 清除聚焦</button>
+      </div>
       <h4 style="margin-top:14px">🔗 关联边</h4>
       <div id="kg-detail-edges"></div>
       <h4 style="margin-top:14px">🎨 图例</h4>
@@ -169,14 +180,182 @@ let DATA=null, kgGraph=null, kgSim=null, kgSvg=null, kgG=null;
 let nodeTypeFilter=new Set(), edgeTypeFilter=new Set(), searchQuery='';
 let trajData=null,trajPlaying=false,trajFrame=0,trajTimer=null;
 
+// ── 分片模式状态 ──
+let KG_MODE='unknown'; // 'shard' | 'batch' | 'unknown'
+let KGS={summary:null,shards:{},currentShard:null};
+let frameFrom=0, frameTo=Infinity;
+let kgSimplifyMode=true; // 简约模式: 隐藏批量噪音节点/边
+let kgFocusNodeId=null; // 聚焦某节点的 ID, null=不聚焦
+
 const TYPE_COLORS={Vehicle:'#3b82f6',TrafficLight:'#ef4444',RoadElement:'#6b7280',EnvironmentSnapshot:'#22c55e',Maneuver:'#f59e0b',InteractionEvent:'#8b5cf6',
-  Vehicle:'#3b82f6',Pedestrian:'#eab308',ego_vehicle:'#ef4444'};
+  BehaviorRelation:'#ec4899',SafetyViolation:'#ef4444',ResponsibilityAssignment:'#f97316',Junction:'#06b6d4',ScenarioSnapshot:'#a78bfa',Pedestrian:'#eab308',Rule:'#fbbf24',
+  ego_vehicle:'#ef4444'};
+
+// ── 简约模式: 隐藏噪量级大的"机械"节点/边 ──
+// 这些类型通常占 90%+ 节点/边 (frame_snapshot / interaction_event / definedBy)
+// 隐藏后图聚焦在"主体 actor + maneuver + safety"骨架
+const SIMPLIFY_HIDE_NODES=new Set(['EnvironmentSnapshot','InteractionEvent','BehaviorRelation','ScenarioSnapshot']);
+const SIMPLIFY_HIDE_EDGES=new Set(['definedBy','supportedByEvidence','hasEnvironment','weather_context',
+  'manifestsAs','has_interaction','actor','dst','src']);
+
 const EDGE_COLORS={in_lane:'#60a5fa',approaching:'#f87171',containsVehicle:'#a78bfa',containsTrafficLight:'#fb923c',containsRoad:'#9ca3af',
   hasEnvironment:'#4ade80',weather_context:'#86efac',lane_connects:'#93c5fd',adjacent_lane:'#bfdbfe',has_maneuver:'#fcd34d',
   has_interaction:'#c084fc',actor:'#e879f9',dst:'#f472b6',src:'#fb7185',standing_still:'#d1d5db',following:'#6ee7b7',
-  manifestsAs:'#fbbf24',in_junction:'#c4b5fd'};
+  manifestsAs:'#fbbf24',in_junction:'#c4b5fd',definedBy:'#94a3b8',supportedByEvidence:'#94a3b8',
+  violates:'#ef4444',responsibleFor:'#f97316',violates_rule:'#ef4444',
+  opposite_direction:'#fb7185',ahead_of:'#60a5fa',overtaking:'#a78bfa',changing_lane:'#c4b5fd',yielding_to:'#86efac',
+  approaching_pedestrian:'#f87171',nearby_pedestrian:'#fbbf24',blocked_view:'#9333ea',beside:'#6b7280'};
 
-fetch('viz_data.json').then(r=>r.json()).then(d=>{DATA=d;init()});
+// ── 启动: 先检测数据模式 ──
+(async function detectMode(){
+  // 先尝试 phase5_kg_summary.json (分片模式)
+  try{
+    const r=await fetch('phase5_kg_summary.json');
+    if(r.ok){
+      KGS.summary=await r.json();
+      KG_MODE='shard';
+      console.log('[shard-mode] summary loaded:',KGS.summary);
+      initShardMode();
+      return;
+    }
+  }catch(e){/* ignore */}
+
+  // 否则尝试 viz_data.json (batch 模式)
+  try{
+    const r=await fetch('viz_data.json');
+    if(r.ok){
+      DATA=await r.json();
+      KG_MODE='batch';
+      console.log('[batch-mode] viz_data loaded');
+      init();
+      return;
+    }
+  }catch(e){/* ignore */}
+
+  // 都没有
+  KG_MODE='none';
+  document.getElementById('header-sub').textContent='⚠ 未找到 phase5_kg_summary.json 或 viz_data.json，请把数据放到 viz_output/ 目录';
+  document.getElementById('summary-cards').innerHTML='<div class="card" style="grid-column:1/-1;text-align:center;color:var(--text2)">⚠ 未找到数据文件</div>';
+})();
+
+// ── 分片模式入口 ──
+function initShardMode(){
+  const s=KGS.summary;
+  // 隐藏不相关的标签页
+  document.getElementById('tab-heatmap').style.display='none';
+  document.getElementById('tab-trajectory').style.display='none';
+  document.getElementById('tab-comparison').style.display='none';
+
+  // 填 header
+  document.getElementById('header-sub').textContent=
+    `5min CARLA · ${s.total_frames} 帧 · ${s.n_shards} 个分片 · coalesce=${s.coalesce_containment} · 总节点 ${s.total_graph_nodes.toLocaleString()} / 边 ${s.total_graph_edges.toLocaleString()}`;
+
+  // 总览卡片
+  renderShardOverview();
+  // 填充分片下拉
+  populateShardSelect();
+  // 不立即加载第 1 分片, 等用户点击 KG 标签再加载
+}
+
+function renderShardOverview(){
+  const s=KGS.summary;
+  document.getElementById('summary-cards').innerHTML=
+    `<div class="card"><div class="label">总帧数</div><div class="value" style="color:var(--accent)">${s.total_frames.toLocaleString()}</div><div class="sub">${(s.total_frames/20/60).toFixed(1)} 分钟 @ 20fps</div></div>
+     <div class="card"><div class="label">分片数</div><div class="value" style="color:var(--green)">${s.n_shards}</div><div class="sub">每片 ${s.shard_frames} 帧</div></div>
+     <div class="card"><div class="label">总节点数</div><div class="value" style="color:var(--green)">${s.total_graph_nodes.toLocaleString()}</div><div class="sub">coalesce 已合并包含边</div></div>
+     <div class="card"><div class="label">总边数</div><div class="value" style="color:var(--blue)">${s.total_graph_edges.toLocaleString()}</div><div class="sub">平均 ${Math.round(s.total_graph_edges/s.n_shards).toLocaleString()}/分片</div></div>
+     <div class="card"><div class="label">引擎增量</div><div class="value" style="color:var(--yellow)">${s.engine_n_deltas.toLocaleString()}</div><div class="sub">行为引擎处理帧数</div></div>
+     <div class="card"><div class="label">Coalesce</div><div class="value">${s.coalesce_containment?'✅ ON':'❌ OFF'}</div><div class="sub">含 containsVehicle 等合并</div></div>`;
+
+  // 各分片柱状图
+  const labels=s.shards.map(sh=>`frames ${sh.frame_start}-${sh.frame_end}`);
+  const nodes=s.shards.map(sh=>sh.graph_nodes);
+  const edges=s.shards.map(sh=>sh.graph_edges);
+  document.getElementById('overview-chart1-title').textContent='各分片节点数';
+  Plotly.newPlot('chart-map-stats',[{x:labels,y:nodes,type:'bar',marker:{color:'#6366f1'},text:nodes,textposition:'outside'}],
+    {margin:{t:10,b:60,l:50,r:20},paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{color:'#8b8fa3'},yaxis:{title:'节点数',gridcolor:'#2a2d3a'},xaxis:{tickangle:-20}},
+    {responsive:true});
+
+  document.getElementById('overview-chart2-title').textContent='各分片边数';
+  Plotly.newPlot('chart-scenario-stats',[{x:labels,y:edges,type:'bar',marker:{color:'#3b82f6'},text:edges,textposition:'outside'}],
+    {margin:{t:10,b:60,l:50,r:20},paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{color:'#8b8fa3'},yaxis:{title:'边数',gridcolor:'#2a2d3a'},xaxis:{tickangle:-20}},
+    {responsive:true});
+
+  document.getElementById('overview-chart3-title').textContent='分片规模对比';
+  Plotly.newPlot('chart-time-dist',[
+    {x:labels,y:nodes,name:'节点',type:'bar',marker:{color:'#6366f1'}},
+    {x:labels,y:edges,name:'边',type:'bar',marker:{color:'#3b82f6'},yaxis:'y2'}
+  ],{margin:{t:10,b:60,l:50,r:50},paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{color:'#8b8fa3'},barmode:'group',
+    yaxis:{title:'节点',gridcolor:'#2a2d3a'},yaxis2:{title:'边',overlaying:'y',side:'right',gridcolor:'#2a2d3a'},xaxis:{tickangle:-20}},
+    {responsive:true});
+
+  document.getElementById('overview-chart4-title').textContent='节点/边占比';
+  Plotly.newPlot('chart-tier-pie',[
+    {values:nodes,labels:labels,type:'pie',marker:{colors:['#22c55e','#eab308','#f97316','#ef4444','#a78bfa']},textinfo:'label+value',textfont:{color:'#fff'},domain:{row:0,column:0}}
+  ],{margin:{t:10,b:10,l:10,r:10},paper_bgcolor:'transparent',font:{color:'#8b8fa3'},showlegend:false,grid:{rows:1,columns:1}},
+    {responsive:true});
+}
+
+function populateShardSelect(){
+  const sel=document.getElementById('kg-shard-select');
+  sel.innerHTML='';
+  // 默认空白选项
+  const def=document.createElement('option');def.value='';def.textContent='-- 选择分片 --';sel.appendChild(def);
+  KGS.summary.shards.forEach(sh=>{
+    const o=document.createElement('option');
+    o.value=sh.shard_idx;
+    o.textContent=`分片 ${sh.shard_idx} (frames ${sh.frame_start}-${sh.frame_end}, ${sh.graph_nodes}节点/${sh.graph_edges}边)`;
+    sel.appendChild(o);
+  });
+}
+
+function switchShard(){
+  // 选了分片立即加载 (KG 标签激活时)
+  if(document.getElementById('panel-kg').classList.contains('active')){
+    loadKG();
+  }
+}
+
+function onFrameRangeChange(){
+  const slider=document.getElementById('kg-frame-from');
+  frameFrom=parseInt(slider.value);
+  frameTo=frameFrom+parseInt(slider.step);
+  // 简化: 解读为 [frameFrom, frameFrom+200] 显示窗口
+  // 或者: 这是一个起始帧 -> 自动设 1999 为终末
+  // 设计: 显示 first_frame >= frameFrom 且 last_frame <= frameTo 的节点
+  // 改用单 slider 设置 from, 固定 to=当前分片末
+  const sObj=KGS.summary.shards.find(s=>s.shard_idx==KGS.currentShard);
+  if(sObj) frameTo=sObj.frame_end;
+  document.getElementById('kg-frame-label').textContent=`${frameFrom}-${frameTo}`;
+  if(kgGraph) renderKGGraph();
+}
+
+function toggleSimplify(){
+  kgSimplifyMode=document.getElementById('kg-simplify').checked;
+  if(!kgGraph) return;
+  // 重新初始化过滤器
+  applySimplifyToFilters();
+  renderKGGraph();
+}
+
+function applySimplifyToFilters(){
+  if(!kgGraph) return;
+  const nTypes=new Set(kgGraph.nodes.map(n=>n.type));
+  const eTypes=new Set(kgGraph.edges.map(e=>e.type));
+  // 重置 filter: 简约模式排除噪类; 完整模式全部选上
+  nodeTypeFilter=new Set();
+  edgeTypeFilter=new Set();
+  for(const t of nTypes){
+    if(kgSimplifyMode && SIMPLIFY_HIDE_NODES.has(t)) continue;
+    nodeTypeFilter.add(t);
+  }
+  for(const t of eTypes){
+    if(kgSimplifyMode && SIMPLIFY_HIDE_EDGES.has(t)) continue;
+    edgeTypeFilter.add(t);
+  }
+  // 同步 sidebar 复选框 (buildSideBarFilters 会重置)
+  buildSideBarFilters(nTypes, eTypes, kgGraph.nodes, kgGraph.edges);
+}
 
 function init(){renderSummary();renderCharts();populateSelectors();renderHeatmaps();renderComparison()}
 
@@ -185,8 +364,17 @@ function switchTab(id){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('panel-'+id).classList.add('active');
   event.target.classList.add('active');
-  if(id==='kg'&&!kgGraph)loadKG();
-  if(id==='trajectory'&&!trajData)loadTrajectory();
+  if(KG_MODE==='shard'){
+    // 分片模式: 切换到 KG 标签时自动加载第 1 个分片
+    if(id==='kg'&&!kgGraph){
+      const sel=document.getElementById('kg-shard-select');
+      if(sel.options.length>1&&sel.value==='') sel.selectedIndex=1;
+      loadKG();
+    }
+  }else if(KG_MODE==='batch'){
+    if(id==='kg'&&!kgGraph)loadKGBatch();
+    if(id==='trajectory'&&!trajData)loadTrajectory();
+  }
 }
 
 // ── 总览 ──
@@ -239,11 +427,18 @@ function getNodeLabel(n){
   const a=n.attrs||{};
   switch(n.type){
     case 'Vehicle': return a.is_ego?'🚗 EGO':'🚗 '+(a.vehicle_type||'').split('.').pop();
+    case 'Pedestrian': return '🚶 '+(n.id||'ped');
     case 'TrafficLight': return '🚦 '+((a.state||'').replace('TrafficLightState.',''));
     case 'RoadElement': return '🛣️ road_'+a.road_id+'_L'+a.lane_id;
+    case 'Junction': return '🚧 junction_'+(a.junction_id||n.id);
     case 'EnvironmentSnapshot': return '🌤️ frame_'+a.frame_id;
-    case 'Maneuver': return '🎯 '+(a.labels||[]).join(',');
-    case 'InteractionEvent': return '⚡ '+(a.labels||[]).join(',');
+    case 'ScenarioSnapshot': return '🎬 scenario_'+n.first_frame+'-'+n.last_frame;
+    case 'Maneuver': return '🎯 '+(a.labels||[]).join(',') || n.id;
+    case 'InteractionEvent': return '⚡ '+(a.labels||[]).join(',') || n.id;
+    case 'BehaviorRelation': return '🔗 '+n.id;
+    case 'SafetyViolation': return '⚠ '+n.id;
+    case 'ResponsibilityAssignment': return '⚖ '+n.id;
+    case 'Rule': return '📜 '+n.id;
     default: return n.type+': '+n.id;
   }
 }
@@ -251,30 +446,104 @@ function getNodeLabel(n){
 function getNodeRadius(n){
   switch(n.type){
     case 'Vehicle':return 10;case 'TrafficLight':return 7;case 'RoadElement':return 4;
-    case 'EnvironmentSnapshot':return 3;case 'Maneuver':return 8;case 'InteractionEvent':return 8;
+    case 'EnvironmentSnapshot':return 3;
+    case 'Junction':return 6;
+    case 'ScenarioSnapshot':return 12;case 'Maneuver':return 8;
+    case 'InteractionEvent':return 8;
+    case 'SafetyViolation':return 9;case 'ResponsibilityAssignment':return 9;
+    case 'BehaviorRelation':return 5;case 'Rule':return 6;case 'Pedestrian':return 6;
     default:return 5;
   }
 }
 
-function loadKG(){
-  const map=document.getElementById('kg-map').value;
-  const sc=document.getElementById('kg-scenario').value;
-  const key=map+'/'+sc;
-  const sd=DATA.scenarios[key];
-  if(!sd||!sd.graph){document.getElementById('kg-info').textContent='无数据';return}
-  kgGraph=sd.graph;
+async function loadKG(){
+  if(KG_MODE==='shard'){
+    return loadKGShard();
+  }
+  return loadKGBatch();
+}
+
+async function loadKGShard(){
+  const sel=document.getElementById('kg-shard-select');
+  if(!sel.value){document.getElementById('kg-info').textContent='请选择一个分片';return}
+  const shardIdx=parseInt(sel.value);
+  const shardInfo=KGS.summary.shards.find(s=>s.shard_idx===shardIdx);
+  if(!shardInfo){document.getElementById('kg-info').textContent='分片元数据未找到';return}
+
+  KGS.currentShard=shardIdx;
+  document.getElementById('kg-info').textContent=`加载分片 ${shardIdx}...`;
+
+  // 按需 fetch 分片 JSON
+  if(!KGS.shards[shardIdx]){
+    try{
+      const fname=`graph_${String(shardIdx).padStart(4,'0')}_${shardInfo.frame_start}_${shardInfo.frame_end}.json`;
+      const r=await fetch(fname);
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      KGS.shards[shardIdx]=await r.json();
+      console.log(`[shard ${shardIdx}] loaded: ${KGS.shards[shardIdx].nodes.length} nodes, ${KGS.shards[shardIdx].edges.length} edges`);
+    }catch(e){
+      document.getElementById('kg-info').textContent='❌ 加载失败: '+e.message;
+      return;
+    }
+  }
+
+  kgGraph=KGS.shards[shardIdx];
   const nodes=kgGraph.nodes, edges=kgGraph.edges;
 
-  // Collect types
+  // 设帧范围 slider 到当前分片
+  const fromSlider=document.getElementById('kg-frame-from');
+  fromSlider.min=shardInfo.frame_start;
+  fromSlider.max=shardInfo.frame_end;
+  fromSlider.step=Math.max(1, Math.floor((shardInfo.frame_end-shardInfo.frame_start)/20));
+  fromSlider.value=shardInfo.frame_start;
+  frameFrom=shardInfo.frame_start;
+  frameTo=shardInfo.frame_end;
+  document.getElementById('kg-frame-label').textContent=`${frameFrom}-${frameTo}`;
+
+	  // Collect types
+	  const nTypes=new Set(nodes.map(n=>n.type));
+	  const eTypes=new Set(edges.map(e=>e.type));
+
+	  // Init filters: 根据简约模式复选框选择过滤集合
+	  nodeTypeFilter=new Set();
+	  edgeTypeFilter=new Set();
+	  for(const t of nTypes){
+	    if(kgSimplifyMode && SIMPLIFY_HIDE_NODES.has(t)) continue;
+	    nodeTypeFilter.add(t);
+	  }
+	  for(const t of eTypes){
+	    if(kgSimplifyMode && SIMPLIFY_HIDE_EDGES.has(t)) continue;
+	    edgeTypeFilter.add(t);
+	  }
+	  searchQuery='';
+	  document.getElementById('kg-search').value='';
+
+	  buildSideBarFilters(nTypes,eTypes,nodes,edges);
+	  renderKGGraph();
+}
+
+function loadKGBatch(){
+  // batch 模式 (viz_data.json): 从 DATA.scenarios[map/scenario].graph 加载
+  const mapSel=document.getElementById('kg-shard-select'); // 在 batch 模式下 we don't really have a shard dropdown
+  // 兼容旧版: 取 DATA 第一个 scenario
+  const keys=Object.keys(DATA.scenarios||{});
+  if(keys.length===0){document.getElementById('kg-info').textContent='无 batch 场景数据';return}
+  const sd=DATA.scenarios[keys[0]];
+  if(!sd||!sd.graph){document.getElementById('kg-info').textContent='无图谱数据';return}
+  kgGraph=sd.graph;
+  const nodes=kgGraph.nodes, edges=kgGraph.edges;
   const nTypes=new Set(nodes.map(n=>n.type));
   const eTypes=new Set(edges.map(e=>e.type));
-
-  // Init filters (all selected)
   nodeTypeFilter=new Set(nTypes);
   edgeTypeFilter=new Set(eTypes);
   searchQuery='';
+  document.getElementById('kg-search').value='';
+  frameFrom=-Infinity; frameTo=Infinity;
+  buildSideBarFilters(nTypes,eTypes,nodes,edges);
+  renderKGGraph();
+}
 
-  // Build filter UI
+function buildSideBarFilters(nTypes,eTypes,nodes,edges){
   const nf=document.getElementById('kg-type-filters');
   nf.innerHTML=[...nTypes].map(t=>{
     const cnt=nodes.filter(n=>n.type===t).length;
@@ -296,17 +565,35 @@ function loadKG(){
   document.getElementById('kg-edge-legend').innerHTML=[...eTypes].map(t=>
     `<div class="edge-legend-item"><span class="edge-legend-line" style="background:${EDGE_COLORS[t]||'#4b5563'}"></span>${t}</div>`
   ).join('');
-
-  renderKGGraph();
 }
 
 function toggleNodeType(cb){cb.checked?nodeTypeFilter.add(cb.dataset.type):nodeTypeFilter.delete(cb.dataset.type);filterKG()}
 function toggleEdgeType(cb){cb.checked?edgeTypeFilter.add(cb.dataset.etype):edgeTypeFilter.delete(cb.dataset.etype);filterKG()}
-function selectAllTypes(){document.querySelectorAll('#kg-type-filters input,#kg-edge-filters input').forEach(cb=>{cb.checked=true});nodeTypeFilter=new Set(kgGraph.nodes.map(n=>n.type));edgeTypeFilter=new Set(kgGraph.edges.map(e=>e.type));filterKG()}
-function selectNoTypes(){document.querySelectorAll('#kg-type-filters input,#kg-edge-filters input').forEach(cb=>{cb.checked=false});nodeTypeFilter.clear();edgeTypeFilter.clear();filterKG()}
+function selectAllTypes(){if(!kgGraph)return;document.querySelectorAll('#kg-type-filters input,#kg-edge-filters input').forEach(cb=>cb.checked=true);nodeTypeFilter=new Set(kgGraph.nodes.map(n=>n.type));edgeTypeFilter=new Set(kgGraph.edges.map(e=>e.type));filterKG()}
+function selectNoTypes(){if(!kgGraph)return;document.querySelectorAll('#kg-type-filters input,#kg-edge-filters input').forEach(cb=>cb.checked=false);nodeTypeFilter.clear();edgeTypeFilter.clear();filterKG()}
+
+// ── 聚焦子图: 围绕某节点 1 跳邻居 ──
+function focusNode(nodeId){
+  if(!kgGraph)return;
+  kgFocusNodeId=nodeId;
+  document.getElementById('btn-focus-node').style.display='inline-block';
+  document.getElementById('btn-focus-clear').style.display='inline-block';
+  renderKGGraph();
+}
+function focusOnNode(){
+  const btn=document.getElementById('btn-focus-node');
+  if(btn&&btn.dataset.nodeId)focusNode(btn.dataset.nodeId);
+}
+function clearFocus(){
+  kgFocusNodeId=null;
+  document.getElementById('btn-focus-node').style.display='none';
+  document.getElementById('btn-focus-clear').style.display='none';
+  if(kgGraph)renderKGGraph();
+}
 
 function filterKG(){
   searchQuery=(document.getElementById('kg-search').value||'').toLowerCase();
+  if(searchQuery && kgFocusNodeId) clearFocus();
   renderKGGraph();
 }
 
@@ -317,6 +604,14 @@ function getVisibleNodes(){
       const label=getNodeLabel(n).toLowerCase();
       if(!label.includes(searchQuery)&&!n.id.toLowerCase().includes(searchQuery))return false;
     }
+    if(kgFocusNodeId){
+      if(n.id===kgFocusNodeId)return true;
+      const isNeighbor=kgGraph.edges.some(e=>
+        ((e.src_id===kgFocusNodeId&&e.dst_id===n.id)||(e.dst_id===kgFocusNodeId&&e.src_id===n.id))&&edgeTypeFilter.has(e.type)
+      );
+      if(!isNeighbor)return false;
+    }
+    if(frameFrom!==undefined && frameFrom!==-Infinity && (n.first_frame<frameFrom || n.last_frame>frameTo))return false;
     return true;
   });
 }

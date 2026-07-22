@@ -52,12 +52,14 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
                     behavior_rels: List = None,
                     cross_layer_rels: List = None,
                     rule_out: Dict = None,
-                    merge_violations: bool = True) -> Dict[str, Any]:
+                    merge_violations: bool = True,
+                    coalesce_containment: bool = False) -> Dict[str, Any]:
     """把单帧 (或帧列表) 的场景快照序列化为 {nodes, edges} JSON.
 
     输入可以是:
       - 单帧 dict: 含 vehicles / pedestrians / traffic_lights / lanes / weather / scene_rels
       - 帧列表: 上面那种 dict 的 list, 会做跨帧去重
+      - generator / iterator: 会被一次性 materialize 成 list
 
     可选参数:
       maneuvers: 行为层 ManueverNode 列表 (每帧一个)
@@ -72,7 +74,19 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
       同 (rule_code, src_id, dst_id) 的多次触发合并为单个 SafetyViolation,
       ID 改为 sv_<rule_code>_<src>_<dst>, attrs 含 fires_n_frames/first_frame/
       last_frame/fired_frames 列表。ResponsibilityAssignment 同步合并。
+
+    coalesce_containment=True 时 (用于 long-run ≥20min 的图压缩):
+      - 不再逐帧创建 scenario_frame_F 节点, 改为 1 个全局 scenario 节点
+        (id=scenario, first_frame/last_frame 覆盖全帧)
+      - containsXXX / has_maneuver / has_interaction 等"frame→entity"边
+        src_id 用 scenario (而不是 scenario_frame_F), 同 (scenario, X, containsXXX)
+        会被 _add_edge 自然合并, attrs.frames 列表记录覆盖的帧
+      - hasEnvironment / weather_context 仍逐帧 (env_frame_F 每帧唯一)
+      - next_frame 时序边随之丢失 (没有逐帧 scenario 节点可链)
+      - in_lane (veh→lane) 仍按 (src,dst,type) 去重, attrs.frames 累积覆盖帧
+      - frames 列表 >1000 时采样 (避免 attrs 反而膨胀)
     """
+    track_frames = coalesce_containment  # 重复见到同一边时是否在 attrs.frames 累计
     if isinstance(frame_snapshot, list):
         frames = frame_snapshot
     elif hasattr(frame_snapshot, "__iter__") and not isinstance(frame_snapshot, (dict, str, bytes)):
@@ -124,25 +138,42 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
     sv_buffer: Dict[int, List] = {}
     ra_buffer: Dict[int, List] = {}
 
-    # ── 创建 ScenarioSnapshot 节点 (每帧一个) ──
+    # ── 创建 ScenarioSnapshot 节点 ──
+    # coalesce 模式下: 用一个全局 scenario 节点替代逐帧 scenario_frame_F
+    # 非启发模式: 维持每帧 scenario_frame_F 节点 (向后兼容)
+    if coalesce_containment and frames:
+        first_fid = frames[0].get("frame_id", 0)
+        last_fid = frames[-1].get("frame_id", 0)
+        scene_global_id = "scenario"
+        nodes[scene_global_id] = {
+            "id": scene_global_id, "type": "ScenarioSnapshot",
+            "first_frame": first_fid, "last_frame": last_fid,
+            "attrs": {
+                "entity_type": "ScenarioSnapshot",
+                "frame_count": len(frames),
+                "first_frame": first_fid,
+                "last_frame": last_fid,
+            },
+        }
     for snap in frames:
         fid = snap.get("frame_id", 0)
-        scene_id = f"scenario_frame_{fid}"
-        if scene_id not in nodes:
-            nodes[scene_id] = {
-                "id": scene_id, "type": "ScenarioSnapshot",
-                "first_frame": fid, "last_frame": fid,
-                "attrs": {
-                    "frame_id": fid,
-                    "entity_type": "ScenarioSnapshot",
-                    "elapsed_seconds": snap.get("elapsed_seconds", 0.0),
-                    "delta_seconds": snap.get("delta_seconds", 0.05),
-                    "vehicle_count": len(snap.get("vehicles", [])),
-                    "pedestrian_count": len(snap.get("pedestrians", [])),
-                    "traffic_light_count": len(snap.get("traffic_lights", [])),
-                    "lane_count": len(snap.get("lanes", [])),
-                },
-            }
+        if not coalesce_containment:
+            scene_id = f"scenario_frame_{fid}"
+            if scene_id not in nodes:
+                nodes[scene_id] = {
+                    "id": scene_id, "type": "ScenarioSnapshot",
+                    "first_frame": fid, "last_frame": fid,
+                    "attrs": {
+                        "frame_id": fid,
+                        "entity_type": "ScenarioSnapshot",
+                        "elapsed_seconds": snap.get("elapsed_seconds", 0.0),
+                        "delta_seconds": snap.get("delta_seconds", 0.05),
+                        "vehicle_count": len(snap.get("vehicles", [])),
+                        "pedestrian_count": len(snap.get("pedestrians", [])),
+                        "traffic_light_count": len(snap.get("traffic_lights", [])),
+                        "lane_count": len(snap.get("lanes", [])),
+                    },
+                }
         # EnvironmentSnapshot 节点也在此创建
         env_id = f"env_frame_{fid}"
         if env_id not in nodes:
@@ -160,19 +191,21 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
             }
 
     # ── 创建时序边 (前后帧连接) ──
-    frame_ids = sorted(set(snap.get("frame_id", 0) for snap in frames))
-    for i in range(len(frame_ids) - 1):
-        f_curr = frame_ids[i]
-        f_next = frame_ids[i + 1]
-        scene_curr = f"scenario_frame_{f_curr}"
-        scene_next = f"scenario_frame_{f_next}"
-        if scene_curr in nodes and scene_next in nodes:
-            edges[(scene_curr, scene_next, "next_frame")] = {
-                "src_id": scene_curr, "dst_id": scene_next,
-                "type": "next_frame",
-                "first_frame": f_curr, "last_frame": f_next,
-                "frame_id": f_curr, "attrs": {"delta": f_next - f_curr},
-            }
+    # coalesce 模式下没有逐帧 scenario 节点, next_frame 时序边跳过 (向后兼容: 老路径仍建)
+    if not coalesce_containment:
+        frame_ids = sorted(set(snap.get("frame_id", 0) for snap in frames))
+        for i in range(len(frame_ids) - 1):
+            f_curr = frame_ids[i]
+            f_next = frame_ids[i + 1]
+            scene_curr = f"scenario_frame_{f_curr}"
+            scene_next = f"scenario_frame_{f_next}"
+            if scene_curr in nodes and scene_next in nodes:
+                edges[(scene_curr, scene_next, "next_frame")] = {
+                    "src_id": scene_curr, "dst_id": scene_next,
+                    "type": "next_frame",
+                    "first_frame": f_curr, "last_frame": f_next,
+                    "frame_id": f_curr, "attrs": {"delta": f_next - f_curr},
+                }
 
     for snap in frames:
         fid = snap.get("frame_id", 0)
@@ -339,17 +372,20 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
             _add_edge(edges, cr_dict, fid)
 
         # --- Frame -> maneuver / interaction (has_maneuver / has_interaction) ---
-        scene_id_xf = f"scenario_frame_{fid}"
+        # coalesce 模式下用全局 scenario 节点; 否则用逐帧 scenario_frame_F (向后兼容)
+        scene_id_xf = "scenario" if coalesce_containment else f"scenario_frame_{fid}"
         for m in man_map.get(fid, []):
             m_eid = str(getattr(m, "entity_id", m.get("entity_id", "") if isinstance(m, dict) else ""))
             if m_eid:
                 _add_edge(edges, {"src_id": scene_id_xf, "dst_id": m_eid,
-                                  "relation_type": "has_maneuver", "frame_id": fid}, fid)
+                                  "relation_type": "has_maneuver", "frame_id": fid}, fid,
+                          track_frames=track_frames)
         for it in int_map.get(fid, []):
             it_eid = str(getattr(it, "entity_id", it.get("entity_id", "") if isinstance(it, dict) else ""))
             if it_eid:
                 _add_edge(edges, {"src_id": scene_id_xf, "dst_id": it_eid,
-                                  "relation_type": "has_interaction", "frame_id": fid}, fid)
+                                  "relation_type": "has_interaction", "frame_id": fid}, fid,
+                          track_frames=track_frames)
 
         # --- Behavior relations ---
         for br in beh_rel_map.get(fid, []):
@@ -366,7 +402,15 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
         # --- Scene relations ---
         if with_relations:
             for rel in snap.get("scene_rels", []):
-                _add_edge_and_target_node(edges, nodes, rel, fid, _scene_rel_factory)
+                # coalesce 模式: 把 src_id 为 scenario_frame_F 的 containsXXX / hasEnvironment 等
+                # 改写为全局 scenario src_id (仅 contains* 系列重复且需要合并; hasEnvironment 仍逐帧)
+                if coalesce_containment and isinstance(rel, dict):
+                    rt = rel.get("relation_type") or rel.get("rel_type") or rel.get("type")
+                    if rt in ("containsVehicle", "containsPedestrian",
+                              "containsTrafficLight", "containsRoad"):
+                        rel = {**rel, "src_id": "scenario"}
+                _add_edge_and_target_node(edges, nodes, rel, fid, _scene_rel_factory,
+                                          track_frames=track_frames)
 
             # 隐式关系: 车辆在车道
             for v in snap.get("vehicles", []):
@@ -397,18 +441,21 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
                     _add_edge(edges, {
                         "src_id": str(veh_id), "dst_id": str(lane_id),
                         "relation_type": "in_lane", "frame_id": fid,
-                    }, fid)
+                    }, fid, track_frames=track_frames)
 
             # containsVehicle / containsPedestrian
-            scene_id = f"scenario_frame_{fid}"
+            # coalesce 模式: 用全局 scenario 节点合并; 否则逐帧 (向后兼容)
+            scene_id = "scenario" if coalesce_containment else f"scenario_frame_{fid}"
             for v in snap.get("vehicles", []):
                 vid = v.get("entity_id") or v.get("id")
                 if vid:
-                    _add_edge(edges, {"src_id": scene_id, "dst_id": str(vid), "relation_type": "containsVehicle", "frame_id": fid}, fid)
+                    _add_edge(edges, {"src_id": scene_id, "dst_id": str(vid), "relation_type": "containsVehicle", "frame_id": fid}, fid,
+                              track_frames=track_frames)
             for p in snap.get("pedestrians", []):
                 pid = p.get("entity_id") or p.get("id")
                 if pid:
-                    _add_edge(edges, {"src_id": scene_id, "dst_id": str(pid), "relation_type": "containsPedestrian", "frame_id": fid}, fid)
+                    _add_edge(edges, {"src_id": scene_id, "dst_id": str(pid), "relation_type": "containsPedestrian", "frame_id": fid}, fid,
+                              track_frames=track_frames)
 
     if merge_violations and sv_buffer:
         _merge_violations_into_nodes(nodes, edges, sv_buffer, ra_buffer)
@@ -619,8 +666,16 @@ def _merge_violations_into_nodes(nodes, edges, sv_buffer, ra_buffer):
             }
 
 
-def _add_edge(edges, rel, fid):
-    """给 edge 做去重 keying, 同 src/dst/type 把 frame 范围合并."""
+def _add_edge(edges, rel, fid, track_frames: bool = False):
+    """给 edge 做去重 keying, 同 src/dst/type 把 frame 范围合并.
+
+    Args:
+      edges: {(src,dst,type): edge_dict}
+      rel:   dict 或 对象, 含 src_id/dst_id/relation_type/frame_id
+      fid:   当前帧 id
+      track_frames: True 时在 attrs.frames 上累积覆盖帧 id (默认 False, 向后兼容)
+                    frames 列表 >1000 时做采样避免 attrs 膨胀
+    """
     if isinstance(rel, dict):
         src = str(rel.get("src_id", ""))
         dst = str(rel.get("dst_id", ""))
@@ -646,8 +701,32 @@ def _add_edge(edges, rel, fid):
             "first_frame": fid, "last_frame": fid,
             "frame_id": fid, "attrs": {},
         }
+        if track_frames:
+            edges[key]["attrs"]["frames"] = [fid]
+            edges[key]["attrs"]["frame_count"] = 1
+        # 合并 extra 字段
+        if extra:
+            for k, v in extra.items():
+                if k == "attrs":
+                    if isinstance(v, dict):
+                        edges[key]["attrs"].update(v)
+                else:
+                    edges[key]["attrs"][k] = v
     else:
         edges[key]["last_frame"] = fid
+        if track_frames:
+            frames_list = edges[key]["attrs"].setdefault("frames", [])
+            if fid not in frames_list:
+                frames_list.append(fid)
+                edges[key]["attrs"]["frame_count"] = len(frames_list)
+                # 列表过长时做采样 (避免 attrs 反而膨胀成大头)
+                if len(frames_list) > 1000 and not edges[key]["attrs"].get("_frames_sampled"):
+                    edges[key]["attrs"]["_frames_sampled"] = True
+                    full = list(frames_list)
+                    edges[key]["attrs"]["frames_full_range"] = (full[0], full[-1])
+                    step = max(1, len(full) // 50)
+                    edges[key]["attrs"]["frames"] = sorted(set(full[::step] + [full[-1]]))
+                    edges[key]["attrs"]["frames_sample_count"] = len(edges[key]["attrs"]["frames"])
 
 
 def _scene_rel_factory(edge_dict, fid):
@@ -679,13 +758,13 @@ def _scene_rel_factory(edge_dict, fid):
     return (None, None)
 
 
-def _add_edge_and_target_node(edges, nodes, rel, fid, factory=None):
+def _add_edge_and_target_node(edges, nodes, rel, fid, factory=None, track_frames=False):
     """添加 edge; 若 edge 端点节点不存在, 通过 factory 尝试补建缺失节点.
 
     factory(edge_dict, fid) -> (target_node_or_None, _)
     """
     # 先添加 edge
-    _add_edge(edges, rel, fid)
+    _add_edge(edges, rel, fid, track_frames=track_frames)
     if factory is None:
         return
     # 解析 edge 信息
