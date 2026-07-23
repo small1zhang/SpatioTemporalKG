@@ -350,7 +350,7 @@ class RuleEnforcer:
 		"""Ego × ROI 内他车 的 RSS 扫描 (阶段1)."""
 		if self._ego_filter is None:
 			return
-		decision = self._ego_filter.select(vehicles, frame_id)
+		decision = self._ego_filter.select(vehicles, frame_id=frame_id)
 		if decision.ego is None:
 			return
 		ego = decision.ego
