@@ -226,6 +226,136 @@ def spawn_walkers(world, n: int, bp_lib, carla_module, seed: int = 42) -> List[T
     return spawned
 
 
+def _ellipse_distance_to_ego(
+    spawn_point: Any,
+    ego_spawn: Any,
+    front: float,
+    rear: float,
+    side: float,
+) -> bool:
+    """笛卡尔椭圆判定: spawn_point 是否在以 ego 为中心的椭圆内.
+
+    ego 朝向取 (0, 0, 0) 开始默认 +x 方向 (spawn_points 无 heading 约束).
+    实际 spawn 后 autopilot 自行调整.
+    """
+    dx = spawn_point.location.x - ego_spawn.location.x
+    dy = spawn_point.location.y - ego_spawn.location.y
+    # 通用: 朝 +x = 0 rad
+    ego_yaw_rad = math.radians(ego_spawn.rotation.yaw)
+    c, s = math.cos(ego_yaw_rad), math.sin(ego_yaw_rad)
+    longitudinal = dx * c + dy * s
+    lateral = -dx * s + dy * c
+    R_long = front if longitudinal >= 0 else rear
+    if R_long <= 0 or side <= 0:
+        return False
+    return (longitudinal / R_long) ** 2 + (lateral / side) ** 2 <= 1.0
+
+
+def spawn_vehicles_ego_centric(
+    world, n: int, bp_lib, map_, carla_module,
+    ego_spawn_point, radius_front=70.0, radius_rear=30.0, radius_side=50.0,
+    seed=42,
+) -> List[Any]:
+    """以 ego 为圆心，在前后差异化椭圆内随机撒 NPC.
+
+    spawn_points 筛选: 仅保留在 ego 周围椭圆内的点.
+    若可用点不足 n-1 个, 从全图补充.
+    """
+    carla = carla_module
+    random.seed(seed)
+    vehicle_bps = bp_lib.filter("vehicle.*")
+    all_spawn_pts = map_.get_spawn_points()
+
+    # 筛选在椭圆内的点
+    in_ellipse = [
+        pt for pt in all_spawn_pts
+        if _ellipse_distance_to_ego(pt, ego_spawn_point,
+                                     radius_front, radius_rear, radius_side)
+    ]
+    # 排除 ego 自己的点
+    in_ellipse = [
+        pt for pt in in_ellipse
+        if not (abs(pt.location.x - ego_spawn_point.location.x) < 0.5
+                and abs(pt.location.y - ego_spawn_point.location.y) < 0.5)
+    ]
+    random.shuffle(in_ellipse)
+    random.shuffle(all_spawn_pts)
+
+    needed = n - 1  # ego 已占一个
+    candidates = in_ellipse
+    if len(candidates) < needed:
+        # 不足时补充全图点
+        extra = [pt for pt in all_spawn_pts if pt not in in_ellipse]
+        extra.sort(key=lambda pt: abs(pt.location.x - ego_spawn_point.location.x)
+                   + abs(pt.location.y - ego_spawn_point.location.y))
+        candidates = in_ellipse + extra[: needed - len(in_ellipse)]
+
+    used = set()
+    spawned = []
+    for pt in candidates[:needed]:
+        for _try in range(10):
+            idx = all_spawn_pts.index(pt) if pt in all_spawn_pts else -1
+            if idx in used:
+                continue
+            bp = random.choice(vehicle_bps)
+            bp.set_attribute("role_name", "autopilot")
+            try:
+                v = world.spawn_actor(bp, pt)
+                v.set_autopilot(True)
+                spawned.append(v)
+                if idx >= 0:
+                    used.add(idx)
+                break
+            except RuntimeError:
+                continue
+    return spawned
+
+
+def spawn_walkers_ego_centric(
+    world, n: int, bp_lib, carla_module,
+    ego_spawn_point, radius_front=70.0, radius_rear=30.0, radius_side=50.0,
+    seed=42,
+) -> List[Tuple[Any, Any]]:
+    """在 ego 周围椭圆内随机生成 walker."""
+    carla = carla_module
+    random.seed(seed + 1)
+    walker_bps = bp_lib.filter("walker.pedestrian.*")
+    controller_bp = bp_lib.find("controller.ai.walker")
+    spawned = []
+    for _ in range(n):
+        if not walker_bps:
+            break
+        bp = random.choice(walker_bps)
+        loc = None
+        for _try in range(50):
+            _loc = world.get_random_location_from_navigation()
+            if _loc is None:
+                continue
+            if _ellipse_distance_to_ego(
+                type("_sp", (), {"location": _loc})(),
+                ego_spawn_point,
+                radius_front, radius_rear, radius_side,
+            ):
+                loc = _loc
+                break
+        if loc is None:
+            continue
+        tf = carla.Transform(loc)
+        try:
+            walker = world.spawn_actor(bp, tf)
+            try:
+                ctl_tf = carla.Transform(carla.Location(loc.x, loc.y, loc.z + 1.0))
+                controller = world.spawn_actor(controller_bp, ctl_tf, attach_to=walker)
+                controller.start()
+                controller.go_to_location(world.get_random_location_from_navigation())
+                spawned.append((walker, controller))
+            except Exception:
+                spawned.append((walker, None))
+        except RuntimeError:
+            continue
+    return spawned
+
+
 def attach_ego_sensors(world, ego, bp_lib, carla_module,
                       sensor_events: List[Dict[str, Any]]) -> List[Any]:
     """给挂 collision + lane invasion sensor, 复用 run_phases_1_5.py 的 listener.
@@ -470,6 +600,15 @@ def main():
     p.add_argument("--spawn-offset", type=int, default=0,
                    help="ego 起始 spawn_point 偏移 (不同 run 用不同 offset 可换起点, "
                         "0=沿用原 default 行为 (随机选), >0 则固定取第 offset 个 spawn_point")
+    # 阶段 4: ego-centric NPC 环形 spawn (FE-14)
+    p.add_argument("--ego-centric", action="store_true",
+                   help="以 ego 为中心、按椭圆范围生成 NPC (而非全图随机)")
+    p.add_argument("--npc-radius-front", type=float, default=70.0,
+                   help="ego-centric 模式中 NPC 前方半径 (m, 默认 70)")
+    p.add_argument("--npc-radius-rear", type=float, default=30.0,
+                   help="ego-centric 模式中 NPC 后方半径 (m, 默认 30)")
+    p.add_argument("--npc-radius-side", type=float, default=50.0,
+                   help="ego-centric 模式中 NPC 侧向半径 (m, 默认 50)")
     args = p.parse_args()
 
     # ------------- Resume 加载 -------------
@@ -571,7 +710,42 @@ def main():
 
     # spawn 交通 (resume 时也要重新 spawn — 因为 CARLA 重启了)
     print(f"[*] Spawning {args.vehicles} vehicles (first=ego=hero) ...")
-    if args.spawn_offset > 0:
+    spawn_mode = "default"
+    if args.ego_centric:
+        # ── ego-centric 椭圆 NPC 模式 (FE-14) ──
+        spawn_pts = map_.get_spawn_points()
+        ego_offset = args.spawn_offset if args.spawn_offset > 0 else 0
+        if not (0 <= ego_offset < len(spawn_pts)):
+            print(f"[!] ego-centric: spawn_offset={ego_offset} 超出范围, "
+                  f"fallback to 0")
+            ego_offset = 0
+        ego_spawn_pt = spawn_pts[ego_offset]
+        vehicle_bps = bp_lib.filter("vehicle.*")
+        random.seed(args.seed)
+        ego_bp = random.choice(vehicle_bps)
+        ego_bp.set_attribute("role_name", "hero")
+        try:
+            ego = world.spawn_actor(ego_bp, ego_spawn_pt)
+            ego.set_autopilot(True)
+            spawned_npcs = spawn_vehicles_ego_centric(
+                world, args.vehicles, bp_lib, map_, carla,
+                ego_spawn_pt,
+                radius_front=args.npc_radius_front,
+                radius_rear=args.npc_radius_rear,
+                radius_side=args.npc_radius_side,
+                seed=args.seed,
+            )
+            spawned_vehicles = [ego] + spawned_npcs
+            spawn_mode = "ego_centric"
+            print(f"[+] ego-centric spawn: ego at spawn_point[{ego_offset}] "
+                  f"radius F={args.npc_radius_front}/R={args.npc_radius_rear}/"
+                  f"S={args.npc_radius_side}, npcs={len(spawned_npcs)}")
+        except RuntimeError as e:
+            print(f"[!] ego-centric spawn failed ({e}), fallback to default")
+            spawned_vehicles = spawn_vehicles(world, args.vehicles, bp_lib,
+                                               map_, carla, seed=args.seed)
+            ego = spawned_vehicles[0] if spawned_vehicles else None
+    elif args.spawn_offset > 0:
         # 用固定 spawn_point offset 给 ego, 不同 run 用不同 offset 可获得不同起位置
         spawn_pts = map_.get_spawn_points()
         if 0 < args.spawn_offset < len(spawn_pts):
@@ -606,7 +780,23 @@ def main():
     print(f"[+] ego_id={ego_id}, vehicles spawned={len(spawned_vehicles)}")
 
     print(f"[*] Spawning {args.walkers} walkers ...")
-    spawned_walkers = spawn_walkers(world, args.walkers, bp_lib, carla, seed=args.seed)
+    if args.ego_centric and ego is not None:
+        ego_tf = ego.get_transform()
+        # ego 当前 pose 复用为 spawn 基准
+        class _EgoAnchor:
+            pass
+        anchor = _EgoAnchor()
+        anchor.location = ego_tf.location
+        anchor.rotation = ego_tf.rotation
+        spawned_walkers = spawn_walkers_ego_centric(
+            world, args.walkers, bp_lib, carla, anchor,
+            radius_front=args.npc_radius_front,
+            radius_rear=args.npc_radius_rear,
+            radius_side=args.npc_radius_side,
+            seed=args.seed,
+        )
+    else:
+        spawned_walkers = spawn_walkers(world, args.walkers, bp_lib, carla, seed=args.seed)
     print(f"[+] walkers spawned={len(spawned_walkers)}")
 
     # 数据集多样性提示
@@ -639,9 +829,30 @@ def main():
     print(f"[+] anomaly schedule: {len(events)} events over {args.total_frames} frames "
           f"(~{args.total_frames/args.fps/60:.1f} min @ {args.fps} fps)")
 
-    # 绑定 target_actor_id (粗绑定到随机背景车; 实时按位置重绑在 tick 中做)
+    # 绑定 target_actor_id (FE-15: 按车道/距离筛选, 失败回退到随机)
     bg_vehicles = [v for v in spawned_vehicles if v.id != ego_id]
-    bind_targets(events, bg_vehicles, ego_id, seed=args.seed)
+    ego_tf = None
+    vehicle_waypoints = {}
+    try:
+        if ego is not None:
+            ego_tf = ego.get_transform()
+            ego_wp = map_.get_waypoint(ego_tf.location, project_to_road=True,
+                                       lane_type=carla.LaneType.Driving)
+            if ego_wp is not None:
+                vehicle_waypoints[str(ego_id)] = (int(ego_wp.road_id), int(ego_wp.lane_id))
+            for v in bg_vehicles:
+                try:
+                    vloc = v.get_location()
+                    vwp = map_.get_waypoint(vloc, project_to_road=True,
+                                            lane_type=carla.LaneType.Driving)
+                    if vwp is not None:
+                        vehicle_waypoints[str(v.id)] = (int(vwp.road_id), int(vwp.lane_id))
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[!] waypoint lookup for bind_targets failed: {e}, fallback to rng.choice")
+    bind_targets(events, bg_vehicles, ego_id, seed=args.seed,
+                 ego_transform=ego_tf, vehicle_waypoints=vehicle_waypoints)
     print(f"[+] bound {sum(1 for e in events if e.target_actor_id)} events to background vehicles")
 
     # RESUME: 用 checkpoint 中的 events 重建事件状态 (含已 applied/completed)
@@ -669,6 +880,7 @@ def main():
             "fps": args.fps, "vehicles": args.vehicles, "walkers": args.walkers,
             "density_per_minute": args.density, "seed": args.seed,
             "ego_id": str(ego_id) if ego_id else None,
+            "spawn_mode": spawn_mode,
             "vehicle_ids": [str(v.id) for v in spawned_vehicles],
             "walker_ids": [str(w.id) for w, _ in spawned_walkers],
             "lane_waypoints_count": len(lane_wps),
