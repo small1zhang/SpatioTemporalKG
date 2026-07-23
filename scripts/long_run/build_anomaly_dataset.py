@@ -271,6 +271,7 @@ ACTOR_FIELDS = [
     "road_id", "lane_id",
     "is_emergency", "is_on_crosswalk", "is_on_sidewalk", "action",
     "is_anomaly", "anomaly_type", "is_anomaly_target",
+    "distance_to_ego", "lon_to_ego", "lat_to_ego", "in_ego_roi",
 ]
 
 
@@ -432,6 +433,20 @@ def process_run(run: Dict[str, Any], sv_by_frame: Dict[int, List[Dict[str, Any]]
 
         # actor 行 (每个 actor 一行)
         target_id_set = set(target_ids)
+        # FE-17: 计算每个 actor 到 ego 的相对距离 (用于 ego-centric 数据集)
+        import math as _math
+        ego_actor = None
+        for a_tmp in actors:
+            if a_tmp.get("type") == "vehicle" and a_tmp.get("is_ego"):
+                ego_actor = a_tmp
+                break
+        ego_loc = None
+        ego_heading_rad = 0.0
+        if ego_actor is not None:
+            e_loc = ego_actor.get("location", {}) or {}
+            ego_loc = (_safe(e_loc, "x"), _safe(e_loc, "y"))
+            ego_heading_rad = float(ego_actor.get("heading_rad", 0.0))
+
         for a in actors:
             atype = a.get("type", "")
             aid = str(a.get("id", ""))
@@ -494,6 +509,35 @@ def process_run(run: Dict[str, Any], sv_by_frame: Dict[int, List[Dict[str, Any]]
                 "is_anomaly_target": int(is_target),     # 该 actor 是否为某异常事件的 target
             })
 
+            # FE-17: ego-centric 4 字段 (距离/纵向/横向/ROI 内)
+            dist_to_ego = 0.0
+            lon_to_ego = 0.0
+            lat_to_ego = 0.0
+            in_ego_roi = 1 if a.get("is_ego") else 0  # ego 自身在 ROI 内
+            if ego_loc is not None and not a.get("is_ego"):
+                dx = _safe(loc, "x") - ego_loc[0]
+                dy = _safe(loc, "y") - ego_loc[1]
+                c = _math.cos(ego_heading_rad)
+                s = _math.sin(ego_heading_rad)
+                lon = dx * c + dy * s
+                lat = -dx * s + dy * c
+                dist = _math.sqrt(dx * dx + dy * dy)
+                # 与 collect.py 一致的椭圆 ROI 判定
+                R_long = 70.0 if lon >= 0 else 30.0
+                R_side = 50.0
+                if R_long > 0 and R_side > 0:
+                    in_ego_roi = int((lon / R_long) ** 2 + (lat / R_side) ** 2 <= 1.0)
+                else:
+                    in_ego_roi = 0
+                dist_to_ego = round(dist, 4)
+                lon_to_ego = round(lon, 4)
+                lat_to_ego = round(lat, 4)
+            # 回填到刚 append 的 dict
+            actor_rows[-1]["distance_to_ego"] = dist_to_ego
+            actor_rows[-1]["lon_to_ego"] = lon_to_ego
+            actor_rows[-1]["lat_to_ego"] = lat_to_ego
+            actor_rows[-1]["in_ego_roi"] = in_ego_roi
+
     return frame_label_rows, actor_rows, event_rows
 
 
@@ -546,6 +590,7 @@ def build_dataset_index(out_dir: Path,
             "map": r["map_name"],
             "kind": "long_run",
             "n_frames": len(r["frames"]),
+            "spawn_mode": r.get("metadata", {}).get("spawn_mode", "default"),
         })
     for r in batch_runs:
         sources.append({
@@ -554,12 +599,17 @@ def build_dataset_index(out_dir: Path,
             "kind": "batch",
             "scenario_id": r.get("scenario_id", ""),
             "n_frames": len(r["frames"]),
+            "spawn_mode": r.get("metadata", {}).get("spawn_mode", "default"),
         })
+
+    # FE-17: spawn_mode 统计
+    all_runs = long_runs + batch_runs
+    spawn_modes = Counter(r.get("metadata", {}).get("spawn_mode", "default") for r in all_runs)
 
     return {
         "description": "SpatioTemporalKG anomaly detection dataset "
                        "(auto-built by build_anomaly_dataset.py)",
-        "schema_version": "1.0",
+        "schema_version": "1.1",  # +1 字段: spawn_mode / spawn_info / 4 ego-centric columns
         "tick_s_default": 0.05,
         "fps_default": 20.0,
         "totals": {
@@ -577,6 +627,12 @@ def build_dataset_index(out_dir: Path,
         "frame_label_columns": FRAME_LABEL_FIELDS,
         "actor_columns":       ACTOR_FIELDS,
         "sources":             sources,
+        "spawn_info": {
+            "modes": dict(spawn_modes),
+            "ego_centric_runs": spawn_modes.get("ego_centric", 0),
+            "default_runs":     spawn_modes.get("default", 0),
+            "total_runs":       sum(spawn_modes.values()),
+        },
         "files": {
             "frame_labels":  "frame_labels.csv",
             "frame_actors":  "frame_actors.csv",
@@ -610,6 +666,8 @@ def main():
                    help="输出根目录 (默认 data/dataset/)")
     p.add_argument("--no-phase5", action="store_true",
                    help="跳过 Phase5 KG 加载 (只用 anomaly_log 作标签)")
+    p.add_argument("--filter-ego-roi", action="store_true",
+                   help="启用后只保留 in_ego_roi==1 的 actor 行 (ego-centric 数据集的样本裁剪)")
     args = p.parse_args()
 
     if not (args.run_dir or args.batch_dir or args.all):
@@ -660,6 +718,12 @@ def main():
         all_frame_rows.extend(frows)
         all_actor_rows.extend(arows)
         all_event_rows.extend(erows)
+
+    # FE-17: --filter-ego-roi 过滤 (只保留 ROI 内 actor)
+    if args.filter_ego_roi:
+        before = len(all_actor_rows)
+        all_actor_rows = [r for r in all_actor_rows if r.get("in_ego_roi", 1)]
+        print(f"    [filter-ego-roi] {before} -> {len(all_actor_rows)} actor rows kept")
 
     # ---------- 3. 写出 ----------
     out_dir = Path(args.out)
