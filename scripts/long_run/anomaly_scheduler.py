@@ -411,7 +411,9 @@ def bind_targets(events: List[AnomalyEvent], spawned_vehicles: List[Any],
 
     def _same_lane(v, ego_wp_key):
         if not vehicle_waypoints or not ego_wp_key:
-            return False
+            # P1-4: 没有 waypoint 信息时, 退化用 |lat|<2.5m 当作"同车道"
+            # (城市道路车道宽 ~3m, 2.5m 内基本是同车道)
+            return None  # 返回 None 表示"未知", 让调用方自行用 lat 判定
         vkey = vehicle_waypoints.get(_v_id_str(v))
         return vkey is not None and vkey == ego_wp_key
 
@@ -445,16 +447,48 @@ def bind_targets(events: List[AnomalyEvent], spawned_vehicles: List[Any],
         candidates.sort(key=lambda x: x[0])
         return candidates[0][1]
 
-    def _p_ahead_same_lane(v, lon, lat):
-        same_lane = _same_lane(v, ego_wp_key)
-        return (same_lane and 5.0 <= lon <= 30.0 and abs(lat) < 3.0), abs(lon)
+    # P1-4: 三级阈值 (strict / relaxed / nearest), 减少直接 rng.choice 降级
+    # 同车道判定在无 waypoint 时退化用 |lat| 阈值 (None from _same_lane → 用 lat)
+    def _lane_ok(v, lat, thresh=2.5):
+        sl = _same_lane(v, ego_wp_key)
+        if sl is True:
+            return True
+        if sl is False:
+            return False
+        # sl is None: 退化用 lat 距离
+        return abs(lat) < thresh
 
-    def _p_lateral_same_dir(v, lon, lat):
+    def _p_ahead_same_lane_strict(v, lon, lat):
+        return (_lane_ok(v, lat, 2.5) and 5.0 <= lon <= 30.0 and abs(lat) < 3.0), abs(lon)
+
+    def _p_ahead_same_lane_relaxed(v, lon, lat):
+        # 放宽到 0-80m, lat < 4.5m (覆盖大椭圆 spawn 范围)
+        return (_lane_ok(v, lat, 3.0) and 0.0 <= lon <= 80.0 and abs(lat) < 4.5), abs(lon)
+
+    def _p_lateral_same_dir_strict(v, lon, lat):
         return (3.0 <= abs(lat) <= 10.0 and -15.0 <= lon <= 15.0), abs(lat)
 
-    def _p_adjacent_lane_ahead(v, lon, lat):
-        same_lane = _same_lane(v, ego_wp_key)
-        return ((not same_lane) and 10.0 <= lon <= 20.0 and abs(lat) < 5.0), abs(lon)
+    def _p_lateral_same_dir_relaxed(v, lon, lat):
+        # 放宽到 0.5-15m 横向, -25~25m 纵向
+        return (0.5 <= abs(lat) <= 15.0 and -25.0 <= lon <= 25.0), abs(lat)
+
+    def _p_adjacent_lane_ahead_strict(v, lon, lat):
+        sl = _same_lane(v, ego_wp_key)
+        # 严格: 必须 waypoint 知道车道且不同车道
+        if sl is None:
+            # 无 waypoint: 用 lat 距离作代理 — 4-7m 算相邻车道
+            is_adj = 4.0 <= abs(lat) < 7.0
+        else:
+            is_adj = (not sl)
+        return (is_adj and 10.0 <= lon <= 20.0 and abs(lat) < 5.0), abs(lon)
+
+    def _p_adjacent_lane_ahead_relaxed(v, lon, lat):
+        sl = _same_lane(v, ego_wp_key)
+        if sl is None:
+            is_adj = 3.0 <= abs(lat) <= 10.0
+        else:
+            is_adj = (not sl)
+        return (is_adj and 5.0 <= lon <= 40.0 and abs(lat) < 8.0), abs(lon)
 
     def _p_nearest(v, lon, lat):
         return (lon is not None), (lon * lon + lat * lat)
@@ -477,18 +511,24 @@ def bind_targets(events: List[AnomalyEvent], spawned_vehicles: List[Any],
             ev.target_actor_id = None
             continue
 
-        # ── 车辆事件绑定 ──
+        # ── P1-4: 三级阈值匹配 (strict → relaxed → nearest → rng.choice) ──
         if ego_loc is not None and atype in ("sudd_brk", "sudd_stp"):
-            match = _find_match(_p_ahead_same_lane)
+            match = _find_match(_p_ahead_same_lane_strict)
+            if match is None:
+                match = _find_match(_p_ahead_same_lane_relaxed)
         elif ego_loc is not None and atype in ("avd_col", "avd_col_track"):
-            match = _find_match(_p_lateral_same_dir)
+            match = _find_match(_p_lateral_same_dir_strict)
+            if match is None:
+                match = _find_match(_p_lateral_same_dir_relaxed)
         elif ego_loc is not None and atype == "cut_in":
-            match = _find_match(_p_adjacent_lane_ahead)
+            match = _find_match(_p_adjacent_lane_ahead_strict)
+            if match is None:
+                match = _find_match(_p_adjacent_lane_ahead_relaxed)
         if match is None:
             # 退化: 距 ego 最近 或 rng.choice
             if ego_loc is not None:
                 match = _find_match(_p_nearest)
-            if match is None:
+            if match is None and bg_vehicles:
                 match = rng.choice(bg_vehicles)
         if match is not None:
             ev.target_actor_id = str(match.id)

@@ -129,6 +129,9 @@ def main():
                    help="ego-centric 模式中 NPC 后方半径 (m)")
     p.add_argument("--npc-radius-side", type=float, default=50.0,
                    help="ego-centric 模式中 NPC 侧向半径 (m)")
+    # P1-2: 紧急车辆 spawn (与 collect.py 一致)
+    p.add_argument("--emergency-vehicles", type=int, default=0,
+                   help="S22 场景: 背景中注入 N 辆紧急车辆 (ambulance/police/firetruck)")
     # FE-19: spectator 自动跟随 ego (与 collect.py 同源, 默认开启)
     p.add_argument("--no-spectator", action="store_true",
                    help="不跟随 ego, 仅由用户操作 CARLA View 视角 (默认跟随)")
@@ -331,14 +334,28 @@ def main():
             # 默认 spawn 路径
             print(f"[*] Spawning {args.vehicles} vehicles (first=ego=hero) ...")
             vehicle_bps = bp_lib.filter("vehicle.*")
+            # P1-2: 紧急车辆 BP 优先 (S22 emergency_vehicle)
+            emergency_bps = []
+            for pat in ("vehicle.*ambulance*", "vehicle.*police*",
+                        "vehicle.*firetruck*", "vehicle.carlacola"):
+                try:
+                    emergency_bps.extend(bp_lib.filter(pat))
+                except Exception:
+                    pass
+            emergency_bps = list(dict.fromkeys(emergency_bps))
             spawn_points = map_.get_spawn_points()
             used = set()
             for i in range(args.vehicles):
                 for _try in range(10):
                     idx = random.randint(0, len(spawn_points) - 1)
                     if idx in used: continue
-                    bp = random.choice(vehicle_bps)
-                    bp.set_attribute("role_name", "hero" if i == 0 else "autopilot")
+                    if 0 < i <= args.emergency_vehicles and emergency_bps:
+                        bp = random.choice(emergency_bps)
+                        role = "emergency"
+                    else:
+                        bp = random.choice(vehicle_bps)
+                        role = "hero" if i == 0 else "autopilot"
+                    bp.set_attribute("role_name", role)
                     try:
                         v = world.spawn_actor(bp, spawn_points[idx])
                         v.set_autopilot(True)

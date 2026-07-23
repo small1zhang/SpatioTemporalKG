@@ -25,7 +25,7 @@ def _compute_speed(vel_dict):
     return math.sqrt(x * x + y * y + z * z)
 
 
-def build_actor_dict(actor, a_type, prev_loc=None):
+def build_actor_dict(actor, a_type, prev_loc=None, map_=None, carla_module=None):
     """从 CARLA Actor 构建完整 dict, 补全提取器需要的所有字段."""
     t = actor.get_transform()
     loc = t.location
@@ -67,8 +67,23 @@ def build_actor_dict(actor, a_type, prev_loc=None):
             d["action"] = actor.get_action()
         except Exception:
             d["action"] = "Idle"
-        d["is_on_crosswalk"] = False
-        d["is_on_sidewalk"] = False
+        # 真值化: 与 collect.py/run_phases_1_5.py 一致, 用 map_ waypoint 查车道类型
+        if map_ is not None and carla_module is not None:
+            try:
+                wp_walker = map_.get_waypoint(t.location, project_to_road=True,
+                                               lane_type=carla_module.LaneType.Any)
+                if wp_walker is not None:
+                    d["is_on_crosswalk"] = (wp_walker.lane_type == carla_module.LaneType.Crosswalk)
+                    d["is_on_sidewalk"] = (wp_walker.lane_type == carla_module.LaneType.Sidewalk)
+                else:
+                    d["is_on_crosswalk"] = False
+                    d["is_on_sidewalk"] = False
+            except Exception:
+                d["is_on_crosswalk"] = False
+                d["is_on_sidewalk"] = False
+        else:
+            d["is_on_crosswalk"] = False
+            d["is_on_sidewalk"] = False
 
     return d
 
@@ -117,9 +132,9 @@ def main():
     tick_s = settings.fixed_delta_seconds or 0.05
 
     for round_idx in range(args.rounds):
-        print(f"\n{=*60}")
+        print(f"\n{'='*60}")
         print(f"[*] Round {round_idx+1}/{args.rounds}")
-        print(f"{=*60}")
+        print(f"{'='*60}")
 
         # ---- 1) 生成车辆 ----
         print(f"[*] Spawning {args.vehicles} vehicles ...")
@@ -199,9 +214,9 @@ def main():
 
             actors_list = []
             for v in vehicles:
-                actors_list.append(build_actor_dict(v, "vehicle"))
+                actors_list.append(build_actor_dict(v, "vehicle", map_=map_, carla_module=carla))
             for wk in walkers:
-                actors_list.append(build_actor_dict(wk, "walker"))
+                actors_list.append(build_actor_dict(wk, "walker", map_=map_, carla_module=carla))
 
             tl_list = []
             for tl in tls:
@@ -307,11 +322,8 @@ def main():
         # 等待一帧让世界回到初始
         world.tick()
 
-    print(f"\n{=*60}")
+    print(f"\n{'='*60}")
     print(f"[OK] All {args.rounds} rounds completed!")
-
 
 if __name__ == "__main__":
     main()
-PYEOF
-echo "write OK, lines=$(wc -l < /home/aisecurity/01_ZHB/SpatioTemporalKG/scripts/carla/spawn_traffic.py)"

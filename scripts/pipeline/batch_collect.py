@@ -134,6 +134,7 @@ def run_single_task(task_id: int, map_name: str, scenario_id: str,
     frames = yaml_params.get("frames", profile["frames"])
     n_vehicles = yaml_params.get("vehicle_count", profile["vehicle_count"])
     n_walkers = yaml_params.get("pedestrian_count", profile["pedestrian_count"])
+    n_emergency = yaml_params.get("emergency_vehicle_count", 0)
 
     try:
         proc = subprocess.run(
@@ -148,6 +149,7 @@ def run_single_task(task_id: int, map_name: str, scenario_id: str,
                 "--walkers", str(n_walkers),
                 "--seed", "42",
                 "--out", f"data/runs/batch/{map_name}/{scenario_id}",
+                "--emergency-vehicles", str(n_emergency),  # P1-2
             ],
             capture_output=True, text=True, timeout=TASK_TIMEOUT,
             env={**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu)},

@@ -165,11 +165,26 @@ def update_spectator_follow_ego(world, ego, carla_module,
 # ============================================================
 
 def spawn_vehicles(world, n: int, bp_lib, map_, carla_module,
-                   seed: int = 42) -> List[Any]:
-    """与 run_phases_1_5.py 一致的 spawn 逻辑, 首车设为 hero (ego)."""
+                   seed: int = 42, emergency_count: int = 0) -> List[Any]:
+    """与 run_phases_1_5.py 一致的 spawn 逻辑, 首车设为 hero (ego).
+
+    Args:
+        emergency_count: P1-2 — 前 emergency_count 辆 (在 ego 之外) 优先选
+            vehicle.*ambulance* / vehicle.*police* / vehicle.*firetruck* 蓝图,
+            并设 role_name='emergency' 让下游识别; 不足时回退到普通车.
+    """
     carla = carla_module
     random.seed(seed)
     vehicle_bps = bp_lib.filter("vehicle.*")
+    # P1-2: 紧急车辆蓝图优先
+    emergency_bps = []
+    for pat in ("vehicle.*ambulance*", "vehicle.*police*",
+                "vehicle.*firetruck*", "vehicle.carlacola"):
+        try:
+            emergency_bps.extend(bp_lib.filter(pat))
+        except Exception:
+            pass
+    emergency_bps = list(dict.fromkeys(emergency_bps))  # 去重保序
     spawn_points = map_.get_spawn_points()
     used = set()
     spawned = []
@@ -178,8 +193,14 @@ def spawn_vehicles(world, n: int, bp_lib, map_, carla_module,
             idx = random.randint(0, len(spawn_points) - 1)
             if idx in used:
                 continue
-            bp = random.choice(vehicle_bps)
-            bp.set_attribute("role_name", "hero" if i == 0 else "autopilot")
+            # P1-2: 紧急车辆配额 (i>=1, 因为 ego 是首车 i=0)
+            if i <= emergency_count and emergency_bps:
+                bp = random.choice(emergency_bps)
+                role = "emergency"
+            else:
+                bp = random.choice(vehicle_bps)
+                role = "hero" if i == 0 else "autopilot"
+            bp.set_attribute("role_name", role)
             try:
                 v = world.spawn_actor(bp, spawn_points[idx])
                 v.set_autopilot(True)
@@ -626,6 +647,11 @@ def main():
                    help="ego-centric 模式中 NPC 后方半径 (m, 默认 30)")
     p.add_argument("--npc-radius-side", type=float, default=50.0,
                    help="ego-centric 模式中 NPC 侧向半径 (m, 默认 50)")
+    # P1-2: 紧急车辆 spawn (S22 emergency_vehicle 实际生效)
+    p.add_argument("--emergency-vehicles", type=int, default=0,
+                   help="S22 场景: 在背景 NPC 中注入 N 辆紧急车辆 "
+                        "(ambulance/police/firetruck), role_name='emergency', "
+                        "下游 actor_dict['is_emergency']=True. 默认 0.")
     args = p.parse_args()
 
     # ------------- Resume 加载 -------------
@@ -768,7 +794,8 @@ def main():
         except RuntimeError as e:
             print(f"[!] ego-centric spawn failed ({e}), fallback to default")
             spawned_vehicles = spawn_vehicles(world, args.vehicles, bp_lib,
-                                               map_, carla, seed=args.seed)
+                                               map_, carla, seed=args.seed,
+                                               emergency_count=args.emergency_vehicles)
             ego = spawned_vehicles[0] if spawned_vehicles else None
     elif args.spawn_offset > 0:
         # 用固定 spawn_point offset 给 ego, 不同 run 用不同 offset 可获得不同起位置
@@ -783,23 +810,27 @@ def main():
                 ego = world.spawn_actor(ego_bp, spawn_pts[args.spawn_offset])
                 ego.set_autopilot(True)
                 spawned_vehicles = [ego] + spawn_vehicles(
-                    world, args.vehicles - 1, bp_lib, map_, carla, seed=args.seed)
+                    world, args.vehicles - 1, bp_lib, map_, carla, seed=args.seed,
+                    emergency_count=args.emergency_vehicles)
                 print(f"[+] ego spawned at spawn_point[{args.spawn_offset}] "
                       f"(offset mode)")
             except RuntimeError as e:
                 print(f"[!] spawn_offset failed ({e}), fallback to default spawn")
                 spawned_vehicles = spawn_vehicles(world, args.vehicles, bp_lib,
-                                                   map_, carla, seed=args.seed)
+                                                   map_, carla, seed=args.seed,
+                                                   emergency_count=args.emergency_vehicles)
                 ego = spawned_vehicles[0] if spawned_vehicles else None
         else:
             print(f"[!] spawn_offset={args.spawn_offset} 超出范围 "
                   f"(spawn_points count={len(spawn_pts)}), fallback to default")
             spawned_vehicles = spawn_vehicles(world, args.vehicles, bp_lib,
-                                               map_, carla, seed=args.seed)
+                                               map_, carla, seed=args.seed,
+                                               emergency_count=args.emergency_vehicles)
             ego = spawned_vehicles[0] if spawned_vehicles else None
     else:
         spawned_vehicles = spawn_vehicles(world, args.vehicles, bp_lib,
-                                           map_, carla, seed=args.seed)
+                                           map_, carla, seed=args.seed,
+                                           emergency_count=args.emergency_vehicles)
         ego = spawned_vehicles[0] if spawned_vehicles else None
     ego_id = ego.id if ego else None
     print(f"[+] ego_id={ego_id}, vehicles spawned={len(spawned_vehicles)}")
