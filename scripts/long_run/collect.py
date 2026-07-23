@@ -232,16 +232,22 @@ def _ellipse_distance_to_ego(
     front: float,
     rear: float,
     side: float,
+    ego_yaw_deg: Optional[float] = None,
 ) -> bool:
     """笛卡尔椭圆判定: spawn_point 是否在以 ego 为中心的椭圆内.
 
-    ego 朝向取 (0, 0, 0) 开始默认 +x 方向 (spawn_points 无 heading 约束).
-    实际 spawn 后 autopilot 自行调整.
+    ego 朝向 (yaw) 默认取 ego_spawn.rotation.yaw (地图预设 spawn point 朝向).
+    可通过 ego_yaw_deg 显式覆盖 — 推荐 spawn 后立即用 ego.get_transform().rotation.yaw
+    覆盖, 因为:
+      - spawn_point.rotation.yaw 在很多地图与实际道路方向不一致 (Town10HD 尤其)
+      - autopilot 启动后 ego 实际朝向会很快偏离 spawn_point 朝向
+      - 与 bind_targets 的 _to_ego_frame() 使用同一份实时 yaw, 才能保证
+        "前车"的几何定义在 spawn / bind / apply 阶段一致
     """
     dx = spawn_point.location.x - ego_spawn.location.x
     dy = spawn_point.location.y - ego_spawn.location.y
-    # 通用: 朝 +x = 0 rad
-    ego_yaw_rad = math.radians(ego_spawn.rotation.yaw)
+    yaw_deg = ego_yaw_deg if ego_yaw_deg is not None else ego_spawn.rotation.yaw
+    ego_yaw_rad = math.radians(yaw_deg)
     c, s = math.cos(ego_yaw_rad), math.sin(ego_yaw_rad)
     longitudinal = dx * c + dy * s
     lateral = -dx * s + dy * c
@@ -254,12 +260,16 @@ def _ellipse_distance_to_ego(
 def spawn_vehicles_ego_centric(
     world, n: int, bp_lib, map_, carla_module,
     ego_spawn_point, radius_front=70.0, radius_rear=30.0, radius_side=50.0,
-    seed=42,
+    seed=42, ego_yaw_deg: Optional[float] = None,
 ) -> List[Any]:
     """以 ego 为圆心，在前后差异化椭圆内随机撒 NPC.
 
     spawn_points 筛选: 仅保留在 ego 周围椭圆内的点.
     若可用点不足 n-1 个, 从全图补充.
+
+    Args:
+        ego_yaw_deg: 椭圆朝向 (deg). 推荐传入 ego 实时 yaw; None 时退化到
+            ego_spawn_point.rotation.yaw (旧行为, 不推荐).
     """
     carla = carla_module
     random.seed(seed)
@@ -270,7 +280,8 @@ def spawn_vehicles_ego_centric(
     in_ellipse = [
         pt for pt in all_spawn_pts
         if _ellipse_distance_to_ego(pt, ego_spawn_point,
-                                     radius_front, radius_rear, radius_side)
+                                     radius_front, radius_rear, radius_side,
+                                     ego_yaw_deg=ego_yaw_deg)
     ]
     # 排除 ego 自己的点
     in_ellipse = [
@@ -314,9 +325,14 @@ def spawn_vehicles_ego_centric(
 def spawn_walkers_ego_centric(
     world, n: int, bp_lib, carla_module,
     ego_spawn_point, radius_front=70.0, radius_rear=30.0, radius_side=50.0,
-    seed=42,
+    seed=42, ego_yaw_deg: Optional[float] = None,
 ) -> List[Tuple[Any, Any]]:
-    """在 ego 周围椭圆内随机生成 walker."""
+    """在 ego 周围椭圆内随机生成 walker.
+
+    Args:
+        ego_yaw_deg: 椭圆朝向 (deg). 推荐传入 ego.get_transform().rotation.yaw;
+            None 时退化到 ego_spawn_point.rotation.yaw (旧行为).
+    """
     carla = carla_module
     random.seed(seed + 1)
     walker_bps = bp_lib.filter("walker.pedestrian.*")
@@ -335,6 +351,7 @@ def spawn_walkers_ego_centric(
                 type("_sp", (), {"location": _loc})(),
                 ego_spawn_point,
                 radius_front, radius_rear, radius_side,
+                ego_yaw_deg=ego_yaw_deg,
             ):
                 loc = _loc
                 break
@@ -727,6 +744,13 @@ def main():
         try:
             ego = world.spawn_actor(ego_bp, ego_spawn_pt)
             ego.set_autopilot(True)
+            # 取 ego 实时 yaw 作为椭圆朝向 (P1-1):
+            # 比 ego_spawn_pt.rotation.yaw 更接近实际道路方向,
+            # 也与下游 bind_targets 用的 ego_tf.rotation.yaw 一致.
+            try:
+                ego_yaw_live = ego.get_transform().rotation.yaw
+            except Exception:
+                ego_yaw_live = ego_spawn_pt.rotation.yaw
             spawned_npcs = spawn_vehicles_ego_centric(
                 world, args.vehicles, bp_lib, map_, carla,
                 ego_spawn_pt,
@@ -734,6 +758,7 @@ def main():
                 radius_rear=args.npc_radius_rear,
                 radius_side=args.npc_radius_side,
                 seed=args.seed,
+                ego_yaw_deg=ego_yaw_live,
             )
             spawned_vehicles = [ego] + spawned_npcs
             spawn_mode = "ego_centric"
@@ -794,6 +819,7 @@ def main():
             radius_rear=args.npc_radius_rear,
             radius_side=args.npc_radius_side,
             seed=args.seed,
+            ego_yaw_deg=ego_tf.rotation.yaw,
         )
     else:
         spawned_walkers = spawn_walkers(world, args.walkers, bp_lib, carla, seed=args.seed)
@@ -858,8 +884,9 @@ def main():
     except Exception as e:
         print(f"[!] waypoint lookup for bind_targets failed: {e}, fallback to rng.choice")
     bind_targets(events, bg_vehicles, ego_id, seed=args.seed,
-                 ego_transform=ego_tf, vehicle_waypoints=vehicle_waypoints)
-    print(f"[+] bound {sum(1 for e in events if e.target_actor_id)} events to background vehicles")
+                 ego_transform=ego_tf, vehicle_waypoints=vehicle_waypoints,
+                 spawned_walkers=spawned_walkers)
+    print(f"[+] bound {sum(1 for e in events if e.target_actor_id)} events to actors")
 
     # RESUME: 用 checkpoint 中的 events 重建事件状态 (含已 applied/completed)
     if resume_ckpt is not None:
@@ -941,10 +968,12 @@ def main():
         for i in range(start_frame, args.total_frames):
             world.tick()
 
-            # 应用异常 (返回 active 事件列表)
-            active_events = sched.tick(i)
+            # 应用异常 (返回 active 事件列表 + 本帧刚完成的事件)
+            active_events, completed_events = sched.tick(i)
             for ev in active_events:
-                log = apply_anomaly(world, ev, ego, carla)
+                log = apply_anomaly(world, ev, ego, carla,
+                                    spawned_walkers=spawned_walkers,
+                                    bp_lib=bp_lib, map_=map_)
                 if log:
                     anomaly_log.append({
                         "frame_id": i, "event_id": ev.event_id,
@@ -952,6 +981,30 @@ def main():
                         "target_actor_id": ev.target_actor_id,
                         "log": log,
                     })
+
+            # 异常结束后恢复 autopilot / 清理 prop
+            for ev in completed_events:
+                if ev.target_actor_id is not None:
+                    try:
+                        a = world.get_actor(int(ev.target_actor_id))
+                        if a is not None and a.is_alive:
+                            if ev.anomaly_type == "obs_blk":
+                                # obs_blk: prop 是静态障碍物, 不恢复 autopilot
+                                # 而是 destroy 掉, 让交通恢复通畅
+                                a.destroy()
+                                extra_obs_id = ev.extra.get("obstacle_actor_id")
+                                if extra_obs_id and extra_obs_id != ev.target_actor_id:
+                                    try:
+                                        oa = world.get_actor(int(extra_obs_id))
+                                        if oa is not None and oa.is_alive:
+                                            oa.destroy()
+                                    except Exception:
+                                        pass
+                            else:
+                                # 车辆类型: 恢复 autopilot 让 TM 重新接管
+                                a.set_autopilot(True)
+                    except Exception:
+                        pass
 
             # 让 spectator 跟随 ego
             if not args.no_spectator and ego is not None:

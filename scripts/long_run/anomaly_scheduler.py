@@ -172,12 +172,20 @@ class EventScheduler:
 
     # ---------------- 主循环 tick ----------------
 
-    def tick(self, frame_id: int) -> List[AnomalyEvent]:
-        """每帧采集前调用: 返回当前帧需要 apply 的活跃事件.
+    def tick(self, frame_id: int) -> Tuple[List["AnomalyEvent"], List["AnomalyEvent"]]:
+        """每帧采集前调用: 返回 (active, completed_this_frame).
 
         - 把 trigger_frame == frame_id 的事件激活并加入 _active
-        - 把 end_frame < frame_id 的事件标记 completed 并移出 _active
-        - 返回 _active 副本, 让 collect.py 对每个 active 事件调用 apply_anomaly
+        - 把 end_frame <= frame_id 的事件标记 completed 并移出 _active
+        - 返回 (active 副本, 本帧刚完成的事件列表):
+            * active: 让 collect.py 对每个 active 事件调用 apply_anomaly
+            * completed_this_frame: 让 collect.py 恢复 NPC autopilot (异常期间
+              被 apply_control 覆盖, 结束后需要 set_autopilot(True) 让交通管理
+              器重新接管, 否则 NPC 会以 brake=1.0 永久停在路中央)
+
+        兼容性: 旧调用方 `active = sched.tick(i)` 会拿到 (active, completed) 二元组,
+        需要 `active, _ = sched.tick(i)` 才能解构; 为不破坏旧调用, 见 collect.py
+        已同步修改.
         """
         # 激活
         for e in self._events:
@@ -186,20 +194,25 @@ class EventScheduler:
                 self._active.append(e)
         # 完成
         still_active = []
+        completed_this_frame = []
         for e in self._active:
             if frame_id >= e.end_frame:
                 e.completed = True
+                completed_this_frame.append(e)
             else:
                 still_active.append(e)
         self._active = still_active
-        return list(self._active)
+        return list(self._active), completed_this_frame
 
 
 # ============================================================
 # 3. 异常动作施加 (CARLA API 直接调用)
 # ============================================================
 
-def apply_anomaly(world, ev: AnomalyEvent, ego, carla_module) -> Optional[str]:
+def apply_anomaly(world, ev: AnomalyEvent, ego, carla_module,
+                  spawned_walkers: Optional[List[Any]] = None,
+                  bp_lib: Any = None,
+                  map_: Any = None) -> Optional[str]:
     """根据 ev.anomaly_type 对 ev.target_actor_id 施加异常动作.
 
     Args:
@@ -207,12 +220,58 @@ def apply_anomaly(world, ev: AnomalyEvent, ego, carla_module) -> Optional[str]:
         ev: 异常事件 (target_actor_id 已经在 collect.py 里被解析为背景 actor id)
         ego: ego vehicle actor (carla.Actor)
         carla_module: carla 模块本体
+        spawned_walkers: P1-3 用于 ped_crs — 选一个 walker 重定向其 AI 目标
+        bp_lib: P1-3 用于 obs_blk — 查 static.prop 蓝图 spawn 障碍物
+        map_: P1-3 用于 obs_blk — 拿 ego 当前 waypoint 投影到车道, 在前方 N 米 spawn
 
     Returns:
         日志字符串, 用于写采集日志.
     """
+    carla = carla_module
+
+    # ── P1-3: obs_blk — tick 时 spawn 障碍物, target_actor_id 用懒绑定 ──
+    # obs_blk 的 target_actor_id 在 spawn 之前为 None; 第一次 apply 时 spawn 静态 prop
+    # 后把它的 actor.id 写回 ev.target_actor_id, 后续帧就维持控制 (虽然静态 prop 不需
+    # 每帧再 apply, 但保持一致调用链)
+    if ev.anomaly_type == "obs_blk":
+        # 已 spawn 过: 直接返回 (静态障碍物无需每帧操作)
+        if ev.target_actor_id is not None:
+            try:
+                a = world.get_actor(int(ev.target_actor_id))
+                if a is not None and a.is_alive:
+                    return f"  [anom-{ev.event_id}] obs_blk prop {ev.target_actor_id} alive"
+            except Exception:
+                pass
+            # 已 spawn 但实际找不到: 标记 target=None 让外层清理
+            ev.target_actor_id = None
+
+        # 没 spawn 过: 找 ego 前方 8-15m 同车道点 spawn static.prop
+        if ego is None or bp_lib is None:
+            return f"  [anom-{ev.event_id}] obs_blk [skip: ego/bp_lib missing]"
+        try:
+            prop_bps = bp_lib.filter("static.prop.*")
+            if not prop_bps:
+                return f"  [anom-{ev.event_id}] obs_blk [skip: no static.prop bps]"
+            bp = random.choice(prop_bps)
+            ego_tf = ego.get_transform()
+            # 取 ego 朝向前方 12m, 横向偏 0 (车道中央)
+            yaw_rad = math.radians(ego_tf.rotation.yaw)
+            tx = ego_tf.location.x + 12.0 * math.cos(yaw_rad)
+            ty = ego_tf.location.y + 12.0 * math.sin(yaw_rad)
+            tz = ego_tf.location.z
+            tf = carla.Transform(carla.Location(x=tx, y=ty, z=tz),
+                                 carla.Rotation(yaw=ego_tf.rotation.yaw))
+            prop = world.spawn_actor(bp, tf)
+            ev.target_actor_id = str(prop.id)
+            # 把 prop.id 也记到 extra 供 cleanup
+            ev.extra.setdefault("obstacle_actor_id", str(prop.id))
+            return f"  [anom-{ev.event_id}] obs_blk spawned prop {prop.id} @12m ahead"
+        except Exception as e:
+            return f"  [anom-{ev.event_id}] obs_blk [spawn failed: {e}]"
+
+    # 其他类型要求 target_actor_id 已绑定
     if ev.target_actor_id is None:
-        return None  # target 还未绑定 (e.g. obs_blk 在 tick 时才 spawn 障碍物)
+        return None
 
     try:
         actor = world.get_actor(int(ev.target_actor_id))
@@ -220,7 +279,6 @@ def apply_anomaly(world, ev: AnomalyEvent, ego, carla_module) -> Optional[str]:
         return f"  [anom-{ev.event_id}] target {ev.target_actor_id} not found"
 
     log = f"  [anom-{ev.event_id}] {ev.anomaly_type} on {ev.target_actor_id} (f={ev.trigger_frame})"
-    carla = carla_module
 
     if ev.anomaly_type in ("sudd_brk", "sudd_stp"):
         # 急刹 / 急停: 强制 brake=1.0, throttle=0
@@ -262,8 +320,35 @@ def apply_anomaly(world, ev: AnomalyEvent, ego, carla_module) -> Optional[str]:
         except Exception as e:
             log += f" [ERR {e}]"
 
+    elif ev.anomaly_type == "ped_crs":
+        # P1-3: 行人横穿 — target_actor_id 是 walker (由 bind_targets 绑定)
+        # 取该 walker 的 AI controller (spawn_walkers 返回 (walker, controller)),
+        # 重定向其 go_to_location 到 ego 当前位置, 提速至 2.0 m/s 朝 ego 走
+        if spawned_walkers is None:
+            log += " [skip: spawned_walkers not provided]"
+            return log
+        # 找对应的 controller
+        ctl = None
+        for w, c in spawned_walkers:
+            if w.id == actor.id:
+                ctl = c
+                break
+        if ctl is None:
+            log += " [skip: walker controller not found]"
+            return log
+        try:
+            if ego is not None:
+                ego_loc = ego.get_location()
+                ctl.start()  # 确保活跃
+                ctl.go_to_location(ego_loc)
+                ctl.set_max_speed(2.0)  # 比正常 1.0 提速 2x, 模拟突发横穿
+                log += f" -> walker heading to ego@({ego_loc.x:.1f},{ego_loc.y:.1f})"
+            else:
+                log += " [skip: ego missing]"
+        except Exception as e:
+            log += f" [ERR {e}]"
+
     else:
-        # ped_crs / obs_blk 在 collect.py 的 spawn 阶段已处理 target
         log += " [skip]"
 
     return log
@@ -276,7 +361,8 @@ def apply_anomaly(world, ev: AnomalyEvent, ego, carla_module) -> Optional[str]:
 def bind_targets(events: List[AnomalyEvent], spawned_vehicles: List[Any],
                  ego_id: Any, seed: int = 42,
                  ego_transform: Any = None,
-                 vehicle_waypoints: Dict[str, Tuple[int, int]] = None) -> None:
+                 vehicle_waypoints: Dict[str, Tuple[int, int]] = None,
+                 spawned_walkers: Optional[List[Any]] = None) -> None:
     """把每个异常事件的 target_actor_id 绑定到与 ego 有合适空间/车道关系的车.
 
     阶段 4 (FE-15) 实现:
@@ -286,6 +372,7 @@ def bind_targets(events: List[AnomalyEvent], spawned_vehicles: List[Any],
         * sudd_brk / sudd_stp: ego 正前方 5-30m 同车道 NPC (前车急刹场景)
         * avd_col / avd_col_track: ego 侧向 3-10m 同向 NPC (侧方切入)
         * cut_in: 相邻车道前方 10-20m NPC
+        * ped_crs: 选一个 walker (P1-3: 不再绑定到车辆)
         * others: 距 ego 最近的同车道/相邻车道 NPC
       - 找不到合适 NPC 时回退到 rng.choice (原行为, 不破坏向后兼容)
 
@@ -296,6 +383,7 @@ def bind_targets(events: List[AnomalyEvent], spawned_vehicles: List[Any],
         ego_transform: ego 的 carla.Transform (可选; 没有则退化到 rng.choice)
         vehicle_waypoints: {vehicle.id_str: (road_id, lane_id)} (可选)
             若未提供, 同车道判定退化为只用距离
+        spawned_walkers: P1-3: (walker, controller) 元组列表, 用于 ped_crs 绑定
     """
     rng = random.Random(seed + 17)
     bg_vehicles = [v for v in spawned_vehicles if v.id != ego_id]
@@ -374,6 +462,22 @@ def bind_targets(events: List[AnomalyEvent], spawned_vehicles: List[Any],
     for ev in events:
         atype = ev.anomaly_type
         match = None
+
+        # ── P1-3: ped_crs — 选一个 walker ──
+        if atype == "ped_crs" and spawned_walkers:
+            walkers = [w for w, _ in spawned_walkers if w.is_alive]
+            if walkers:
+                rng.shuffle(walkers)
+                match = walkers[0]
+                ev.target_actor_id = str(match.id)
+                continue
+
+        # ── P1-3: obs_blk — target 在 tick 时才 spawn, 此处留 None ──
+        if atype == "obs_blk":
+            ev.target_actor_id = None
+            continue
+
+        # ── 车辆事件绑定 ──
         if ego_loc is not None and atype in ("sudd_brk", "sudd_stp"):
             match = _find_match(_p_ahead_same_lane)
         elif ego_loc is not None and atype in ("avd_col", "avd_col_track"):
@@ -386,7 +490,8 @@ def bind_targets(events: List[AnomalyEvent], spawned_vehicles: List[Any],
                 match = _find_match(_p_nearest)
             if match is None:
                 match = rng.choice(bg_vehicles)
-        ev.target_actor_id = str(match.id)
+        if match is not None:
+            ev.target_actor_id = str(match.id)
 
 
 # ============================================================

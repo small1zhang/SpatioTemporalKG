@@ -288,9 +288,13 @@ def main():
                 used = {ego_offset}
                 npc_targets = [pt for i, pt in enumerate(spawn_points)
                                if i not in used]
-                # 椭圆判定
+                # 椭圆判定 — 朝向取 ego 实时 yaw (P1-1: 与 collect.py / bind_targets 一致)
                 import math as _m
-                eyaw = _m.radians(ego_spawn_pt.rotation.yaw)
+                try:
+                    _ego_yaw_live = ego.get_transform().rotation.yaw
+                except Exception:
+                    _ego_yaw_live = ego_spawn_pt.rotation.yaw
+                eyaw = _m.radians(_ego_yaw_live)
                 c, s = _m.cos(eyaw), _m.sin(eyaw)
                 def _in_ell(pt):
                     dx = pt.location.x - ego_spawn_pt.location.x
