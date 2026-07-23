@@ -274,22 +274,119 @@ def apply_anomaly(world, ev: AnomalyEvent, ego, carla_module) -> Optional[str]:
 # ============================================================
 
 def bind_targets(events: List[AnomalyEvent], spawned_vehicles: List[Any],
-                 ego_id: Any, seed: int = 42) -> None:
-    """把每个异常事件的 target_actor_id 绑定到一个背景车 id (优先 ego 前后 30m).
+                 ego_id: Any, seed: int = 42,
+                 ego_transform: Any = None,
+                 vehicle_waypoints: Dict[str, Tuple[int, int]] = None) -> None:
+    """把每个异常事件的 target_actor_id 绑定到与 ego 有合适空间/车道关系的车.
+
+    阶段 4 (FE-15) 实现:
+      - 利用 ego_transform (ego 当前 pose) 与 vehicle_waypoints (每车 road_id/lane_id)
+        做按车道/距离筛选, 替换原占位的纯 rng.choice
+      - 针对不同 anomaly_type 差异化匹配:
+        * sudd_brk / sudd_stp: ego 正前方 5-30m 同车道 NPC (前车急刹场景)
+        * avd_col / avd_col_track: ego 侧向 3-10m 同向 NPC (侧方切入)
+        * cut_in: 相邻车道前方 10-20m NPC
+        * others: 距 ego 最近的同车道/相邻车道 NPC
+      - 找不到合适 NPC 时回退到 rng.choice (原行为, 不破坏向后兼容)
 
     Args:
         events: 已构建好的调度表
-        spawned_vehicles: CARLA actor 列表 (ego 在内的所有 spawn 车)
-        ego_id: ego actor 的 id
+        spawned_vehicles: CARLA actor 列表 (含 ego)
+        ego_id: ego actor id
+        ego_transform: ego 的 carla.Transform (可选; 没有则退化到 rng.choice)
+        vehicle_waypoints: {vehicle.id_str: (road_id, lane_id)} (可选)
+            若未提供, 同车道判定退化为只用距离
     """
     rng = random.Random(seed + 17)
     bg_vehicles = [v for v in spawned_vehicles if v.id != ego_id]
     if not bg_vehicles:
         return
+
+    import math as _math
+    ego_loc = getattr(ego_transform, "location", None) if ego_transform else None
+    ego_yaw_rad = 0.0
+    if ego_transform and hasattr(ego_transform, "rotation"):
+        ego_yaw_rad = _math.radians(ego_transform.rotation.yaw)
+
+    def _to_ego_frame(npc_loc):
+        if ego_loc is None:
+            return None, None
+        dx = npc_loc.x - ego_loc.x
+        dy = npc_loc.y - ego_loc.y
+        c, s = _math.cos(ego_yaw_rad), _math.sin(ego_yaw_rad)
+        lon = dx * c + dy * s
+        lat = -dx * s + dy * c
+        return lon, lat
+
+    def _v_id_str(v):
+        return str(getattr(v, "id", ""))
+
+    def _same_lane(v, ego_wp_key):
+        if not vehicle_waypoints or not ego_wp_key:
+            return False
+        vkey = vehicle_waypoints.get(_v_id_str(v))
+        return vkey is not None and vkey == ego_wp_key
+
+    ego_wp_key = None
+    if vehicle_waypoints and ego_id is not None:
+        ego_wp_key = vehicle_waypoints.get(str(ego_id))
+
+    # 按 NPC 与 ego 的空间关系做缓存
+    npc_scored = []
+    for v in bg_vehicles:
+        try:
+            vloc = v.get_location()
+        except Exception:
+            continue
+        lon, lat = _to_ego_frame(vloc)
+        if lon is None:
+            npc_scored.append((v, None, None))
+            continue
+        npc_scored.append((v, lon, lat))
+
+    def _find_match(predicate):
+        candidates = []
+        for v, lon, lat in npc_scored:
+            if lon is None:
+                continue
+            ok, score = predicate(v, lon, lat)
+            if ok:
+                candidates.append((score, v))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[0])
+        return candidates[0][1]
+
+    def _p_ahead_same_lane(v, lon, lat):
+        same_lane = _same_lane(v, ego_wp_key)
+        return (same_lane and 5.0 <= lon <= 30.0 and abs(lat) < 3.0), abs(lon)
+
+    def _p_lateral_same_dir(v, lon, lat):
+        return (3.0 <= abs(lat) <= 10.0 and -15.0 <= lon <= 15.0), abs(lat)
+
+    def _p_adjacent_lane_ahead(v, lon, lat):
+        same_lane = _same_lane(v, ego_wp_key)
+        return ((not same_lane) and 10.0 <= lon <= 20.0 and abs(lat) < 5.0), abs(lon)
+
+    def _p_nearest(v, lon, lat):
+        return (lon is not None), (lon * lon + lat * lat)
+
     for ev in events:
-        # todo: 真正要做到 "ego 前后 30m", 需要在 collect.py tick 时按位置筛选,
-        # 这里先做粗绑定 (随机选一辆背景车作为 target), 留待 collect.py 重绑.
-        ev.target_actor_id = str(rng.choice(bg_vehicles).id)
+        atype = ev.anomaly_type
+        match = None
+        if ego_loc is not None and atype in ("sudd_brk", "sudd_stp"):
+            match = _find_match(_p_ahead_same_lane)
+        elif ego_loc is not None and atype in ("avd_col", "avd_col_track"):
+            match = _find_match(_p_lateral_same_dir)
+        elif ego_loc is not None and atype == "cut_in":
+            match = _find_match(_p_adjacent_lane_ahead)
+        if match is None:
+            # 退化: 距 ego 最近 或 rng.choice
+            if ego_loc is not None:
+                match = _find_match(_p_nearest)
+            if match is None:
+                match = rng.choice(bg_vehicles)
+        ev.target_actor_id = str(match.id)
 
 
 # ============================================================
