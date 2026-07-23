@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Frame Snapshot KG - 帧时刻快照图谱</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<style>
+:root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3a;--text:#e0e0e0;--text2:#8b8fa3;--accent:#6366f1;--green:#22c55e;--ego:#f97316;--red:#ef4444;--blue:#3b82f6}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:'Inter','Segoe UI',sans-serif;display:flex;flex-direction:column;height:100vh}
+.header{background:linear-gradient(135deg,#1e1b4b,#312e81);padding:14px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.header h1{font-size:18px;font-weight:700}
+.header .sub{color:var(--text2);font-size:11px;margin-top:2px}
+.controls{display:flex;gap:10px;align-items:center;padding:10px 24px;background:var(--card);border-bottom:1px solid var(--border);flex-wrap:wrap}
+.controls label{font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px}
+select{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px}
+button{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:hover{opacity:.85}
+.frame-row{background:var(--card);padding:10px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px}
+.frame-row input[type=range]{flex:1;height:6px;accent-color:var(--accent)}
+.frame-display{font-family:monospace;font-size:14px;color:var(--accent);font-weight:700;min-width:120px;text-align:center;padding:4px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px}
+.frame-stat{color:var(--text2);font-size:11px}
+.main{display:flex;flex:1;overflow:hidden}
+.graph-area{flex:1;position:relative;overflow:hidden;background:var(--bg)}
+.sidebar{width:280px;background:var(--card);border-left:1px solid var(--border);padding:14px;overflow-y:auto;font-size:12px}
+.sidebar h4{font-size:13px;color:var(--accent);margin:12px 0 6px;border-bottom:1px solid var(--border);padding-bottom:4px}
+.sidebar h4:first-child{margin-top:0}
+.prop{display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border)}
+.prop .k{color:var(--text2)}.prop .v{color:var(--text);font-weight:500;max-width:170px;overflow:hidden;text-overflow:ellipsis}
+.node-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;color:#fff}
+.edge-item{padding:3px 0;border-bottom:1px solid var(--border);font-size:11px}
+.edge-type{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-right:4px;color:#fff}
+.filter-list{max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px;background:var(--bg)}
+.filter-list label{display:flex;align-items:center;gap:5px;padding:2px 0;font-size:11px;cursor:pointer}
+.filter-list input{accent-color:var(--accent)}
+#graph-svg{width:100%;height:100%}
+.loading{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text2);font-size:14px}
+.legend-item{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:11px;color:var(--text2)}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.swatch{width:14px;height:3px;display:inline-block}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>⏱️ Frame Snapshot KG · 帧时刻知识图谱</h1>
+    <div class="sub">选取一帧 → 只显示此时存在的节点 · EGO 视角车严格 = is_ego=true 的唯一一辆</div>
+  </div>
+  <div>
+    <label style="font-size:12px;color:var(--text2)">分片
+      <select id="shard-select" onchange="loadShard()"></select>
+    </label>
+  </div>
+</div>
+
+<div class="frame-row">
+  <span style="font-size:12px;color:var(--text)">🎞️ 帧时刻</span>
+  <input type="range" id="frame-slider" min="0" max="1999" step="1" value="0" oninput="onFrameChange()">
+  <div class="frame-display" id="frame-display">Frame 0</div>
+  <span class="frame-stat" id="frame-stat">--</span>
+</div>
+
+<div class="controls">
+  <label><input type="checkbox" id="chk-ego-only" checked onchange="renderFrame()"> 🎯 EGO 中心: 仅显示与 EGO 直连的节点</label>
+  <label><input type="checkbox" id="chk-2hop" onchange="renderFrame()"> 显示 2跳邻居</label>
+  <label><input type="checkbox" id="chk-include-snapshot" onchange="renderFrame()"> 包含 EnvironmentSnapshot 节点</label>
+  <label><input type="checkbox" id="chk-edge-labels" checked onchange="renderFrame()"> 显示关系标签</label>
+  <button class="primary" onclick="resetView()">↺ 重置视图</button>
+  <button onclick="loadShard()">⟳ 重新加载</button>
+  <span id="info" style="color:var(--text2);font-size:12px;margin-left:auto"></span>
+</div>
+
+<div class="main">
+  <div class="graph-area" id="graph-area">
+    <div class="loading" id="loading">加载中...</div>
+  </div>
+  <div class="sidebar">
+    <h4>📋 EGO 自车信息</h4>
+    <div id="ego-info" style="color:var(--text2)">--</div>
+
+    <h4>🎯 当前帧可见节点类型</h4>
+    <div class="filter-list" id="type-filter-list">
+      <div style="color:var(--text2)">加载后显示...</div>
+    </div>
+
+    <h4>🔗 当前帧 EGO 关联边</h4>
+    <div id="ego-edges" style="color:var(--text2)">--</div>
+
+    <h4>🎨 节点类型图例</h4>
+    <div id="legend"></div>
+  </div>
+</div>
+
+<script>
+const TYPE_COLORS={Vehicle:'#3b82f6',TrafficLight:'#ef4444',RoadElement:'#6b7280',EnvironmentSnapshot:'#22c55e',
+  Maneuver:'#f59e0b',InteractionEvent:'#8b5cf6',SafetyViolation:'#ef4444',ResponsibilityAssignment:'#f97316',
+  Junction:'#06b6d4',ScenarioSnapshot:'#a78bfa',Pedestrian:'#eab308',Rule:'#fbbf24',BehaviorRelation:'#ec4899'};
+const EDGE_COLORS={in_lane:'#60a5fa',approaching:'#f87171',containsVehicle:'#a78bfa',containsTrafficLight:'#fb923c',
+  containsRoad:'#9ca3af',hasEnvironment:'#4ade80',weather_context:'#86efac',lane_connects:'#93c5fd',
+  adjacent_lane:'#bfdbfe',has_maneuver:'#fcd34d',has_interaction:'#c084fc',actor:'#e879f9',dst:'#f472b6',
+  src:'#fb7185',standing_still:'#d1d5db',following:'#6ee7b7',manifestsAs:'#fbbf24',in_junction:'#c4b5fd',
+  violates:'#ef4444',responsibleFor:'#f97316',opposite_direction:'#fb7185',ahead_of:'#60a5fa',
+  overtaking:'#a78bfa',changing_lane:'#c4b5fd',yielding_to:'#86efac',approaching_pedestrian:'#f87171',
+  nearby_pedestrian:'#fbbf24',blocked_view:'#9333ea',beside:'#6b7280',definedBy:'#94a3b8',supportedByEvidence:'#94a3b8'};
+
+let KGS={summary:null,shards:{}};
+let currentShardIdx=null;
+let currentFrame=0;
+let typeFilter=new Set(); // 默认全选
+
+(async function init(){
+  try{
+    const r=await fetch('phase5_kg_summary.json');
+    KGS.summary=await r.json();
+    fillShardSelect();
+    loadShard();
+  }catch(e){
+    document.getElementById('loading').textContent='❌ 未找到 phase5_kg_summary.json';
+  }
+})();
+
+function fillShardSelect(){
+  const sel=document.getElementById('shard-select');
+  KGS.summary.shards.forEach(sh=>{
+    const o=document.createElement('option');
+    o.value=sh.shard_idx;
+    o.textContent=`分片 ${sh.shard_idx} (frames ${sh.frame_start}-${sh.frame_end})`;
+    sel.appendChild(o);
+  });
+}
+
+async function loadShard(){
+  const sel=document.getElementById('shard-select');
+  if(!sel.value) return;
+  currentShardIdx=parseInt(sel.value);
+  const shardInfo=KGS.summary.shards.find(s=>s.shard_idx===currentShardIdx);
+  if(!shardInfo) return;
+
+  document.getElementById('loading').style.display='flex';
+  document.getElementById('loading').textContent='⏳ 加载分片...';
+  document.querySelector('#graph-area svg')?.remove();
+
+  if(!KGS.shards[currentShardIdx]){
+    const fname=`graph_${String(currentShardIdx).padStart(4,'0')}_${shardInfo.frame_start}_${shardInfo.frame_end}.json`;
+    const r=await fetch(fname);
+    KGS.shards[currentShardIdx]=await r.json();
+  }
+
+  // 设置 frame slider 范围
+  const slider=document.getElementById('frame-slider');
+  slider.min=shardInfo.frame_start;
+  slider.max=shardInfo.frame_end;
+  slider.value=shardInfo.frame_start;
+  currentFrame=shardInfo.frame_start;
+  document.getElementById('frame-display').textContent=`Frame ${currentFrame}`;
+
+  renderFrame();
+  document.getElementById('loading').style.display='none';
+}
+
+function onFrameChange(){
+  currentFrame=parseInt(document.getElementById('frame-slider').value);
+  document.getElementById('frame-display').textContent=`Frame ${currentFrame}`;
+  renderFrame();
+}
+
+function renderFrame(){
+  if(currentShardIdx===null) return;
+  const g=KGS.shards[currentShardIdx];
+  if(!g) return;
+
+  const slider=document.getElementById('frame-slider');
+  // slider tooltip 跟随
+  document.getElementById('frame-display').textContent=`Frame ${currentFrame}`;
+  const pct=((currentFrame-slider.min)/(slider.max-slider.min+1)*100).toFixed(1);
+  document.getElementById('frame-stat').textContent=`位置 ${pct}%`;
+
+  // 1) 找 ego 节点 (严格 is_ego=true 的唯一 Vehicle)
+  const ego=g.nodes.find(n=>n.type==='Vehicle' && (n.attrs||{}).is_ego===true);
+  if(!ego){
+    document.getElementById('info').textContent='❌ 未找到 is_ego=true 的 Vehicle 节点';
+    return;
+  }
+  const egoId=ego.id;
+
+  // 2) 当前帧存在的节点 (first_frame <= f <= last_frame)
+  const includeSnap=document.getElementById('chk-include-snapshot').checked;
+  const frameNodes=g.nodes.filter(n=>{
+    if(n.first_frame>currentFrame || n.last_frame<currentFrame) return false;
+    const t=n.type;
+    if((t==='EnvironmentSnapshot'||t==='ScenarioSnapshot') && !includeSnap) return false;
+    if(!includeSnap && (t==='InteractionEvent'||t==='BehaviorRelation')) return false;
+    return true;
+  });
+
+  // 3) 当前帧 ego 直连的边和邻居 (1跳)
+  const egoOnly=document.getElementById('chk-ego-only').checked;
+  const show2hop=document.getElementById('chk-2hop').checked;
+
+  // 收集 EGO 关联节点 ID
+  const egoNeighborIds=new Set([egoId]);
+  const egoDirectEdges=[];
+  const frameNodeIds=new Set(frameNodes.map(n=>n.id));
+  for(const e of g.edges){
+    if(!frameNodeIds.has(e.src_id) || !frameNodeIds.has(e.dst_id)) continue;
+    if(e.src_id===egoId || e.dst_id===egoId){
+      egoDirectEdges.push(e);
+      const nb=e.src_id===egoId?e.dst_id:e.src_id;
+      egoNeighborIds.add(nb);
+    }
+  }
+
+  // 4) 可见节点过滤: ego-only 模式只显示 EGO 邻居; 否则显示全部当前帧节点
+  let visNodes, visEdges;
+  if(egoOnly){
+    // 收集 2跳 if needed
+    if(show2hop){
+      for(const e of g.edges){
+        if(!frameNodeIds.has(e.src_id) || !frameNodeIds.has(e.dst_id)) continue;
+        if(egoNeighborIds.has(e.src_id) && !egoNeighborIds.has(e.dst_id)) egoNeighborIds.add(e.dst_id);
+        else if(egoNeighborIds.has(e.dst_id) && !egoNeighborIds.has(e.src_id)) egoNeighborIds.add(e.src_id);
+      }
+    }
+    visNodes=frameNodes.filter(n=>egoNeighborIds.has(n.id));
+    visEdges=g.edges.filter(e=>frameNodeIds.has(e.src_id)&&frameNodeIds.has(e.dst_id)
+      && egoNeighborIds.has(e.src_id)&&egoNeighborIds.has(e.dst_id));
+  }else{
+    visNodes=frameNodes;
+    visEdges=g.edges.filter(e=>frameNodeIds.has(e.src_id)&&frameNodeIds.has(e.dst_id));
+  }
+
+  // 5) 类型过滤
+  if(typeFilter.size>0){
+    const allowed=new Set();
+    for(const n of visNodes){
+      if(typeFilter.has(n.type)) allowed.add(n.id);
+    }
+    visNodes=visNodes.filter(n=>allowed.has(n.id));
+    visEdges=visEdges.filter(e=>allowed.has(e.src_id)&&allowed.has(e.dst_id));
+  }
+
+  // 6) 渲染
+  drawD3(visNodes, visEdges, egoId);
+
+  // 7) 更新侧边栏 (类型勾选 + EGO 信息 + 关联边)
+  updateTypeFilter(visNodes);
+  updateEgoSidebar(ego, egoDirectEdges);
+  buildLegend(visNodes, egoId);
+  document.getElementById('info').textContent=`帧 ${currentFrame}: ${visNodes.length} 节点 / ${visEdges.length} 边 (本帧全图 ${frameNodes.length} 节点)`;
+}
+
+function drawD3(nodes, edges, egoId){
+  const container=document.getElementById('graph-area');
+  container.querySelector('svg')?.remove();
+
+  const W=container.clientWidth||900, H=container.clientHeight||550;
+  const svg=d3.select(container).append('svg').attr('width',W).attr('height',H).attr('id','graph-svg');
+  const g=svg.append('g');
+  svg.call(d3.zoom().scaleExtent([.1,30]).on('zoom',e=>g.attr('transform',e.transform)));
+
+  // 网格
+  const gg=g.append('g');
+  for(let x=-W;x<W*2;x+=80)gg.append('line').attr('x1',x).attr('y1',-H).attr('x2',x).attr('y2',H*2).attr('stroke','#1a1d27').attr('stroke-width',.5);
+  for(let y=-H;y<H*2;y+=80)gg.append('line').attr('x1',-W).attr('y1',y).attr('x2',W*2).attr('y2',y).attr('stroke','#1a1d27').attr('stroke-width',.5);
+
+  // 力布局
+  const simNodes=nodes.map(n=>({
+    ...n,
+    x:(n.attrs?.location_x||0)*2.5+W/2,
+    y:-(n.attrs?.location_y||0)*2.5+H/2
+  }));
+  const nodeMap={};simNodes.forEach(n=>nodeMap[n.id]=n);
+  const simEdges=edges.filter(e=>nodeMap[e.src_id]&&nodeMap[e.dst_id]).map(e=>({...e,source:e.src_id,target:e.dst_id}));
+
+  // 箭头
+  const defs=svg.append('defs');
+  new Set(simEdges.map(e=>e.type)).forEach(t=>{
+    const c=EDGE_COLORS[t]||'#4b5563';
+    defs.append('marker').attr('id','a-'+t).attr('viewBox','0 -4 8 8').attr('refX',20).attr('refY',0)
+      .attr('markerWidth',5).attr('markerHeight',5).attr('orient','auto')
+      .append('path').attr('d','M0,-3L8,0L0,3').attr('fill',c);
+  });
+
+  const link=g.append('g').selectAll('line').data(simEdges).join('line')
+    .attr('stroke',d=>EDGE_COLORS[d.type]||'#4b5563').attr('stroke-width',1.2)
+    .attr('stroke-opacity',.45).attr('marker-end',d=>'url(#a-'+d.type+')');
+
+  const showLabels=document.getElementById('chk-edge-labels').checked;
+  const edgeLabel=g.append('g').selectAll('text').data(simEdges).join('text')
+    .attr('font-size',6).attr('fill',d=>EDGE_COLORS[d.type]||'#4b5563').attr('text-anchor','middle').attr('dy',-3)
+    .attr('opacity',showLabels?.6:0).text(d=>d.type);
+
+  // 节点
+  const node=g.append('g').selectAll('g').data(simNodes).join('g')
+    .call(d3.drag().on('start',(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y})
+      .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y}).on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null}));
+
+  node.append('circle')
+    .attr('r',d=>{
+      if(d.id===egoId) return 14;
+      switch(d.type){
+        case 'Vehicle':return 8;case 'TrafficLight':return 6;case 'RoadElement':return 4;
+        case 'Junction':return 5;case 'Maneuver':return 7;case 'Pedestrian':return 5;
+        case 'SafetyViolation':return 7;case 'ResponsibilityAssignment':return 7;default:return 4;
+      }
+    })
+    .attr('fill',d=>d.id===egoId?'var(--ego)':(TYPE_COLORS[d.type]||'#6b7280'))
+    .attr('stroke',d=>d.id===egoId?'#fff':'#0f1117')
+    .attr('stroke-width',d=>d.id===egoId?3:1.5)
+    .style('cursor','pointer')
+    .on('click',(e,d)=>showNodeDetail(d,simEdges))
+    .on('mouseover',function(e,d){
+      d3.select(this).transition().duration(150).attr('r',d=>d.id===egoId?18:(d.type==='Vehicle'?12:9));
+      link.attr('stroke-opacity',l=>(l.src_id===d.id||l.dst_id===d.id)?.9:.08);
+      link.attr('stroke-width',l=>(l.src_id===d.id||l.dst_id===d.id)?2.5:.3);
+      edgeLabel.attr('opacity',l=>(l.src_id===d.id||l.dst_id===d.id)?.8:0);
+      node.attr('opacity',n2=>{
+        if(n2.id===d.id)return 1;
+        if(simEdges.some(e=>(e.src_id===d.id&&e.dst_id===n2.id)||(e.dst_id===d.id&&e.src_id===n2.id)))return 1;
+        return .12;
+      });
+    })
+    .on('mouseout',function(){
+      link.attr('stroke-opacity',.45).attr('stroke-width',1.2);
+      edgeLabel.attr('opacity',showLabels?.6:0);
+      node.attr('opacity',1);
+    });
+
+  // 标签
+  node.append('text')
+    .attr('dy',d=>{
+      const r=d.id===egoId?14:(d.type==='Vehicle'?8:5);
+      return -r-3;
+    })
+    .attr('text-anchor','middle').attr('font-size',d=>d.id===egoId?10:7)
+    .attr('font-weight',600).attr('fill','#e0e0e0')
+    .attr('paint-order','stroke').attr('stroke','#0f1117').attr('stroke-width',2.5)
+    .text(d=>{
+      if(d.id===egoId) return '🚗 EGO';
+      if(d.type==='Vehicle') return '🚗'+(d.attrs?.vehicle_type||'').split('.').pop().slice(0,8);
+      if(d.type==='Pedestrian') return '🚶'+d.id;
+      if(d.type==='TrafficLight') return '🚦'+(d.attrs?.state||'').replace('TrafficLightState.','').slice(0,3);
+      if(d.type==='RoadElement') return 'L'+d.attrs?.lane_id;
+      if(d.type==='Maneuver') return '🎯'+(d.attrs?.labels||[]).join(',').slice(0,10);
+      if(d.type==='SafetyViolation') return '⚠'+(d.attrs?.rule_code||'').slice(0,8);
+      if(d.type==='Junction') return '🚧J';
+      if(d.type==='InteractionEvent') return '⚡';
+      if(d.type==='ResponsibilityAssignment') return '⚖';
+      if(d.type==='EnvironmentSnapshot') return '🌤️';
+      return d.type.slice(0,5);
+    });
+
+  // 力
+  const sim=d3.forceSimulation(simNodes)
+    .force('link',d3.forceLink(simEdges).id(d=>d.id).distance(d=>d.source===egoId||d.target===egoId?90:60).strength(d=>(d.source===egoId||d.target===egoId)?.5:.1))
+    .force('charge',d3.forceManyBody().strength(d=>d.id===egoId?-400:-50))
+    .force('center',d3.forceCenter(W/2,H/2)).force('collision',d3.forceCollide(d=>d.id===egoId?20:7))
+    .force('x',d3.forceX(W/2).strength(.02)).force('y',d3.forceY(H/2).strength(.02));
+
+  sim.on('tick',()=>{
+    link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+    edgeLabel.attr('x',d=>(d.source.x+d.target.x)/2).attr('y',d=>(d.source.y+d.target.y)/2);
+    node.attr('transform',d=>`translate(${d.x},${d.y})`);
+  });
+}
+
+function showNodeDetail(n,edges){
+  const a=n.attrs||{};
+  let html=`<div style="margin-bottom:6px"><span class="node-badge" style="background:${TYPE_COLORS[n.type]||'#6b7280'}">${n.type}</span></div>`;
+  html+=`<div class="prop"><span class="k">ID</span><span class="v">${n.id}</span></div>`;
+  html+=`<div class="prop"><span class="k">帧范围</span><span class="v">${n.first_frame}~${n.last_frame}</span></div>`;
+  const skip=new Set(['entity_id','entity_type','first_frame','last_frame']);
+  for(const[k,v]of Object.entries(a)){
+    if(skip.has(k)||v===null||v===undefined)continue;
+    const vs=typeof v==='number'?v.toFixed?.(2)??v:String(v);
+    html+=`<div class="prop"><span class="k">${k}</span><span class="v" title="${vs}">${vs}</span></div>`;
+  }
+  // 关联边
+  const conn=edges.filter(e=>e.src_id===n.id||e.dst_id===n.id);
+  const grouped={};
+  conn.forEach(e=>{if(!grouped[e.type])grouped[e.type]=[];grouped[e.type].push(e)});
+  document.getElementById('ego-info').innerHTML=html;
+  const edgeHtml=Object.entries(grouped).map(([t,es])=>{
+    const c=EDGE_COLORS[t]||'#4b5563';
+    return es.slice(0,8).map(e=>{
+      const other=e.src_id===n.id?e.dst_id:e.src_id;
+      const dir=e.src_id===n.id?'→':'←';
+      return `<div class="edge-item"><span class="edge-type" style="background:${c}">${t}</span>${dir} <b>${other}</b></div>`;
+    }).join('')+(es.length>8?`<div style="color:var(--text2);font-size:11px">...还有 ${es.length-8} 条</div>`:'');
+  }).join('');
+  document.getElementById('ego-edges').innerHTML=edgeHtml||'<div style="color:var(--text2)">无关联边</div>';
+}
+
+function updateTypeFilter(visNodes){
+  const types=[...new Set(visNodes.map(n=>n.type))];
+  const list=document.getElementById('type-filter-list');
+  if(types.length===0){list.innerHTML='<div style="color:var(--text2)">无可见节点</div>';return}
+  // 默认全选
+  if(typeFilter.size===0){types.forEach(t=>typeFilter.add(t))}
+  list.innerHTML=types.map(t=>{
+    const cnt=visNodes.filter(n=>n.type===t).length;
+    const c=TYPE_COLORS[t]||'#6b7280';
+    const checked=typeFilter.has(t)?'checked':'';
+    return `<label><input type="checkbox" ${checked} data-type="${t}" onchange="toggleType(this)"><span class="dot" style="background:${c}"></span>${t} <span style="color:var(--text2)">(${cnt})</span></label>`;
+  }).join('');
+}
+function toggleType(cb){
+  if(cb.checked) typeFilter.add(cb.dataset.type);
+  else typeFilter.delete(cb.dataset.type);
+  renderFrame();
+}
+
+function updateEgoSidebar(ego,edges){
+  const a=ego.attrs||{};
+  let html=`<div style="margin-bottom:6px"><span class="node-badge" style="background:var(--ego)">🚗 EGO Vehicle</span></div>`;
+  html+=`<div class="prop"><span class="k">ID</span><span class="v">${ego.id}</span></div>`;
+  html+=`<div class="prop"><span class="k">帧范围</span><span class="v">${ego.first_frame}~${ego.last_frame}</span></div>`;
+  const keys=['vehicle_type','speed','speed_kmh','heading_rad','location_x','location_y','lane_id','road_id','current_lane_id','throttle','brake','steer'];
+  for(const k of keys){
+    if(a[k]===undefined||a[k]===null)continue;
+    let v=a[k];
+    if(typeof v==='number') v=v.toFixed(2);
+    html+=`<div class="prop"><span class="k">${k}</span><span class="v" title="${v}">${v}</span></div>`;
+  }
+  document.getElementById('ego-info').innerHTML=html;
+
+  // EGO 当前帧关联边
+  const grouped={};
+  edges.forEach(e=>{if(!grouped[e.type])grouped[e.type]=[];grouped[e.type].push(e)});
+  document.getElementById('ego-edges').innerHTML=Object.entries(grouped).map(([t,es])=>{
+    const c=EDGE_COLORS[t]||'#4b5563';
+    return es.slice(0,8).map(e=>{
+      const other=e.src_id===ego.id?e.dst_id:e.src_id;
+      const dir=e.src_id===ego.id?'→':'←';
+      return `<div class="edge-item"><span class="edge-type" style="background:${c}">${t}</span>${dir} <b>${other}</b></div>`;
+    }).join('')+(es.length>8?`<div style="color:var(--text2);font-size:11px">...还有 ${es.length-8} 条</div>`:'');
+  }).join('')||'<div style="color:var(--text2)">无关联边</div>';
+}
+
+function buildLegend(visNodes, egoId){
+  const types=[...new Set(visNodes.map(n=>n.type))];
+  document.getElementById('legend').innerHTML=types.map(t=>{
+    const c=TYPE_COLORS[t]||'#6b7280';
+    const cnt=visNodes.filter(n=>n.type===t).length;
+    return `<div class="legend-item"><span class="dot" style="background:${t==='Vehicle'&&visNodes.find(n=>n.id===egoId)?'var(--ego)':c}"></span>${t} <span style="color:var(--text2)">(${cnt})</span></div>`;
+  }).join('');
+}
+
+function resetView(){
+  const svg=document.querySelector('#graph-area svg');
+  // 重置 zoom 需要重新 attach, 简单做法: 重新渲染
+  renderFrame();
+}
+</script>
+</body>
+</html>

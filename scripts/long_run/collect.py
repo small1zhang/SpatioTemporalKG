@@ -203,7 +203,7 @@ def spawn_walkers(world, n: int, bp_lib, carla_module, seed: int = 42) -> List[T
             break
         bp = random.choice(walker_bps)
         loc = None
-        for _try in range(10):
+        for _try in range(30):
             _loc = world.get_random_location_from_navigation()
             if _loc is not None:
                 loc = _loc
@@ -798,6 +798,12 @@ def main():
     else:
         spawned_walkers = spawn_walkers(world, args.walkers, bp_lib, carla, seed=args.seed)
     print(f"[+] walkers spawned={len(spawned_walkers)}")
+    if len(spawned_walkers) < args.walkers:
+        pct = 100 * len(spawned_walkers) / max(args.walkers, 1)
+        print(f"[!] walkers under-spawned: requested={args.walkers}, "
+              f"got={len(spawned_walkers)} ({pct:.0f}%) "
+              f"— navigation points sparse on this map; consider increasing "
+              f"--walkers or use --ego-centric mode")
 
     # 数据集多样性提示
     if args.weather_cycle:

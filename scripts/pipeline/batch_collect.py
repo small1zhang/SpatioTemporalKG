@@ -60,21 +60,23 @@ PORT_BASE = 3000   # 任务端口 = PORT_BASE + task_index
 TASK_TIMEOUT = 600  # 每个任务最长 10 分钟
 
 # 场景 -> 帧数/车辆/行人 配置
+# 字段名与 map_configs/*.yaml 的 scenario_parameters 对齐:
+#   vehicle_count / pedestrian_count / frames
 SCENARIO_PROFILES = {
-    "S00": {"frames": 100, "vehicles": 3,  "walkers": 0},
-    "S01": {"frames": 100, "vehicles": 5,  "walkers": 0},
-    "S02": {"frames": 100, "vehicles": 3,  "walkers": 8},
-    "S10": {"frames": 150, "vehicles": 3,  "walkers": 5},
-    "S11": {"frames": 150, "vehicles": 6,  "walkers": 0},
-    "S12": {"frames": 150, "vehicles": 5,  "walkers": 2},
-    "S13": {"frames": 150, "vehicles": 8,  "walkers": 0},
-    "S20": {"frames": 150, "vehicles": 10, "walkers": 0},
-    "S21": {"frames": 150, "vehicles": 8,  "walkers": 0},
-    "S22": {"frames": 150, "vehicles": 6,  "walkers": 2},
-    "S30": {"frames": 150, "vehicles": 3,  "walkers": 5},
-    "S31": {"frames": 150, "vehicles": 6,  "walkers": 0},
-    "S32": {"frames": 150, "vehicles": 5,  "walkers": 0},
-    "S33": {"frames": 150, "vehicles": 5,  "walkers": 6},
+    "S00": {"frames": 100, "vehicle_count": 3,  "pedestrian_count": 0},
+    "S01": {"frames": 100, "vehicle_count": 5,  "pedestrian_count": 0},
+    "S02": {"frames": 100, "vehicle_count": 3,  "pedestrian_count": 8},
+    "S10": {"frames": 150, "vehicle_count": 3,  "pedestrian_count": 5},
+    "S11": {"frames": 150, "vehicle_count": 6,  "pedestrian_count": 0},
+    "S12": {"frames": 150, "vehicle_count": 5,  "pedestrian_count": 2},
+    "S13": {"frames": 150, "vehicle_count": 8,  "pedestrian_count": 0},
+    "S20": {"frames": 150, "vehicle_count": 10, "pedestrian_count": 0},
+    "S21": {"frames": 150, "vehicle_count": 8,  "pedestrian_count": 0},
+    "S22": {"frames": 150, "vehicle_count": 6,  "pedestrian_count": 2},
+    "S30": {"frames": 150, "vehicle_count": 3,  "pedestrian_count": 5},
+    "S31": {"frames": 150, "vehicle_count": 6,  "pedestrian_count": 0},
+    "S32": {"frames": 150, "vehicle_count": 5,  "pedestrian_count": 0},
+    "S33": {"frames": 150, "vehicle_count": 5,  "pedestrian_count": 6},
 }
 
 
@@ -130,8 +132,8 @@ def run_single_task(task_id: int, map_name: str, scenario_id: str,
 
     # 2) Run pipeline
     frames = yaml_params.get("frames", profile["frames"])
-    n_vehicles = yaml_params.get("vehicle_count", profile["vehicles"])
-    n_walkers = yaml_params.get("pedestrian_count", profile["walkers"])
+    n_vehicles = yaml_params.get("vehicle_count", profile["vehicle_count"])
+    n_walkers = yaml_params.get("pedestrian_count", profile["pedestrian_count"])
 
     try:
         proc = subprocess.run(

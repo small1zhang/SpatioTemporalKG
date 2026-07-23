@@ -24,6 +24,34 @@ def banner(label):
     print("=" * 70)
 
 
+def update_spectator_follow_ego(world, ego, carla_module,
+                                  offset_back: float = -8.0,
+                                  offset_up: float = 4.0) -> None:
+    """让 CARLA 服务器自带 viewer 的 spectator 跟随 ego (第三人称视角).
+
+    与 scripts/long_run/collect.py (commit 14cec4e) 同源实现:
+      每帧 world.tick() 后调用 → 取 ego transform → 加 offset → set_transform 给 spectator.
+      CARLA 服务器窗口 (CarlaUE4) 会自动渲染 spectator 视角, 看到 ego 实时跟车.
+
+    offset_back > 0 = ego 前方, 默认 -8 = 后方 8m; offset_up 默认 4 = 上方 4m.
+    """
+    carla = carla_module
+    try:
+        tf = ego.get_transform()
+        yaw_rad = math.radians(tf.rotation.yaw)
+        forward_x = math.cos(yaw_rad)
+        forward_y = math.sin(yaw_rad)
+        cam_loc = carla.Location(
+            x=tf.location.x + forward_x * offset_back,
+            y=tf.location.y + forward_y * offset_back,
+            z=tf.location.z + offset_up,
+        )
+        cam_rot = carla.Rotation(yaw=tf.rotation.yaw, pitch=-8.0)
+        world.get_spectator().set_transform(carla.Transform(cam_loc, cam_rot))
+    except Exception:
+        pass
+
+
 def collect_waypoints(world, max_count: int = 2000):
     carla = sys.modules["carla"]
     map_ = world.get_map()
@@ -79,6 +107,8 @@ def main():
     p.add_argument("--carla-port", type=int, default=None,
                    help="CARLA server port (默认=--port)")
     p.add_argument("--frames", type=int, default=60)
+    p.add_argument("--fps", type=float, default=20.0,
+                   help="同步模式 fixed_delta_seconds = 1/fps (与 collect.py 一致, 默认 20)")
     p.add_argument("--vehicles", type=int, default=30)
     p.add_argument("--walkers", type=int, default=15)
     p.add_argument("--seed", type=int, default=42)
@@ -99,6 +129,13 @@ def main():
                    help="ego-centric 模式中 NPC 后方半径 (m)")
     p.add_argument("--npc-radius-side", type=float, default=50.0,
                    help="ego-centric 模式中 NPC 侧向半径 (m)")
+    # FE-19: spectator 自动跟随 ego (与 collect.py 同源, 默认开启)
+    p.add_argument("--no-spectator", action="store_true",
+                   help="不跟随 ego, 仅由用户操作 CARLA View 视角 (默认跟随)")
+    p.add_argument("--spectator-offset-back", type=float, default=-8.0,
+                   help="spectator 相对 ego 前后偏移 (m, 负=后方)")
+    p.add_argument("--spectator-offset-up", type=float, default=4.0,
+                   help="spectator 相对 ego 上方高度 (m)")
     args = p.parse_args()
     if getattr(args, "thresholds_json", None):
         import json as _json
@@ -194,6 +231,37 @@ def main():
             print(f"[!] cant collect waypoints: {e}")
             lane_wps = []
 
+    # 同步模式 (与 collect.py 一致, TrafficManager 驱动车辆必需)
+    settings = world.get_settings()
+    settings.synchronous_mode = True
+    settings.fixed_delta_seconds = 1.0 / args.fps
+    world.apply_settings(settings)
+    tick_s = settings.fixed_delta_seconds
+    print(f"[+] synchronous_mode=True, fixed_delta={tick_s:.4f}s ({args.fps} fps)")
+
+    # spawn 前: 强制清理上次 run 残留 actor (被 pkill / SIGSEGV 卡在场景里的车)
+    # 不清理的话 ① spawn 容易碰撞卡住 ② autopilot 注册到旧 TM 端口不工作
+    if not args.no_spawn:
+        try:
+            existing = world.get_actors()
+            stale_v = list(existing.filter("vehicle.*"))
+            stale_w = list(existing.filter("walker.*"))
+            n_stale = len(stale_v) + len(stale_w)
+            if n_stale > 0:
+                print(f"[*] Cleaning {n_stale} stale actors from previous run "
+                      f"(v={len(stale_v)}, w={len(stale_w)}) ...")
+                for a in (stale_v + stale_w):
+                    try:
+                        a.destroy()
+                    except Exception:
+                        pass
+                # 同步 tick 几帧, 让 TM 内部把旧 actor 注册表清干净
+                for _ in range(5):
+                    world.tick()
+                print(f"[+] stale actors cleaned")
+        except Exception as e:
+            print(f"[!] stale actor cleanup warning: {e}")
+
     spawned_vehicles = []
     spawned_walkers = []
     ego = None  # FE-16: 显式 ego 引用
@@ -277,28 +345,43 @@ def main():
             ego = spawned_vehicles[0] if spawned_vehicles else None
             print(f"[+] spawned {len(spawned_vehicles)} vehicles")
 
-        print(f"[*] Spawning {args.walkers} walkers ...")
+        print(f"[*] Spawning {args.walkers} walkers (with AI controller) ...")
         walker_bps = bp_lib.filter("walker.pedestrian.*")
         controller_bp = bp_lib.find("controller.ai.walker")
-        batches = []
+        spawned_walkers = []
+        random.seed(args.seed + 1)
         for _ in range(args.walkers):
-            if not walker_bps: break
+            if not walker_bps:
+                break
             bp = random.choice(walker_bps)
-            nav_loc = world.get_random_location_from_navigation()
-            if nav_loc is None: continue
-            tf = carla.Transform(nav_loc)
-            wc = carla.command.SpawnActor(bp, tf)
-            wc.then(carla.command.SpawnActor(controller_bp, tf))
-            batches.append(wc)
-        if batches:
-            results = client.apply_batch_sync(batches, True)
-            for i in range(0, len(results) - 1, 2):
-                if not results[i].error and not results[i+1].error:
-                    spawned_walkers.append((results[i].actor_id, results[i+1].actor_id))
+            loc = None
+            for _try in range(30):
+                _loc = world.get_random_location_from_navigation()
+                if _loc is not None:
+                    loc = _loc
+                    break
+            if loc is None:
+                continue
+            tf = carla.Transform(loc)
+            try:
+                walker = world.spawn_actor(bp, tf)
+                try:
+                    ctl_tf = carla.Transform(carla.Location(loc.x, loc.y, loc.z + 1.0))
+                    controller = world.spawn_actor(controller_bp, ctl_tf, attach_to=walker)
+                    controller.start()
+                    controller.go_to_location(world.get_random_location_from_navigation())
+                    spawned_walkers.append((walker, controller))
+                except Exception:
+                    spawned_walkers.append((walker, None))
+            except RuntimeError:
+                continue
         print(f"[+] spawned {len(spawned_walkers)} walkers")
-
-    settings = world.get_settings()
-    tick_s = settings.fixed_delta_seconds or 0.05
+        if len(spawned_walkers) < args.walkers:
+            pct = 100 * len(spawned_walkers) / max(args.walkers, 1)
+            print(f"[!] walkers under-spawned: requested={args.walkers}, "
+                  f"got={len(spawned_walkers)} ({pct:.0f}%) "
+                  f"— navigation points sparse on this map; consider increasing "
+                  f"--walkers or use --ego-centric mode")
 
     # T1.6: 帧循环前为第一辆 spawned vehicle 挂 collision/lane_invasion sensor
     sensor_events = []
@@ -319,7 +402,8 @@ def main():
                     "event_type": "Collision",
                     "ego_id": str(ego_for_sensor.id),
                     "other_id": str(other_id),
-                    "impulse": float(event.impulse.length()) if hasattr(event.impulse, "length") else 0.0,
+                    # CARLA 0.9.16 CollisionEvent 没有 impulse 字段 (旧版才有)
+                    "impulse": 0.0,
                     "location_x": float(event.transform.location.x),
                     "location_y": float(event.transform.location.y),
                 })
@@ -348,6 +432,20 @@ def main():
     from stk.extraction.weather_extractor import build_environment_snapshot
     from stk.extraction.waypoint_extractor import extract_waypoints, build_lane_topology
 
+    # FE-19: spectator 自动跟随 ego (与 collect.py 同源)
+    _spectator_enabled = not args.no_spectator and ego is not None
+    if _spectator_enabled:
+        print(f"[+] spectator follow enabled: ego={ego.id}, "
+              f"offset_back={args.spectator_offset_back}m, offset_up={args.spectator_offset_up}m")
+
+    # 确认 ego 处于 autopilot
+    if ego is not None:
+        try:
+            ego.set_autopilot(True)
+            print(f"[+] ego {ego.id} autopilot ON")
+        except Exception as e:
+            print(f"[!] cannot set autopilot on ego: {e}")
+
     phase1_frames = []
     lanes_static = extract_waypoints(lane_wps)
     scene_rels_static = build_lane_topology(lane_wps)
@@ -360,6 +458,14 @@ def main():
         walkers = actors.filter("walker.*")
         tls = actors.filter("traffic.traffic_light*")
         weather = world.get_weather()
+
+        # FE-19: spectator 跟随 ego (tick 后调用, 与 collect.py 一致)
+        if _spectator_enabled and ego is not None and ego.is_alive:
+            update_spectator_follow_ego(
+                world, ego, carla,
+                offset_back=args.spectator_offset_back,
+                offset_up=args.spectator_offset_up,
+            )
 
         actors_list = []
         for v in vehicles:
@@ -729,6 +835,14 @@ def main():
     timings["phase5_storage"] = time.time() - t0
 
     print("\n[*] Cleaning up spawned actors ...")
+    try:
+        # 恢复异步模式 (与 collect.py 一致)
+        settings = world.get_settings()
+        settings.synchronous_mode = False
+        settings.fixed_delta_seconds = None
+        world.apply_settings(settings)
+    except Exception:
+        pass
     try:
         for a in world.get_actors():
             try:

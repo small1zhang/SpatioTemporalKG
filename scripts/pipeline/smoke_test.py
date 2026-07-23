@@ -34,20 +34,20 @@ from process_manager import (
 
 # 场景参数映射: YAML scenario_parameters -> CARLA traffic/weather 设置
 SCENARIO_TRAFFIC_PROFILES = {
-    "S00": {"vehicles": 3,  "walkers": 0,  "weather": "clear",    "frames": 100},
-    "S01": {"vehicles": 5,  "walkers": 0,  "weather": "clear",    "frames": 100},
-    "S02": {"vehicles": 3,  "walkers": 8,  "weather": "clear",    "frames": 100},
-    "S10": {"vehicles": 3,  "walkers": 5,  "weather": "clear",    "frames": 150},
-    "S11": {"vehicles": 6,  "walkers": 0,  "weather": "clear",    "frames": 150},
-    "S12": {"vehicles": 5,  "walkers": 2,  "weather": "clear",    "frames": 150},
-    "S13": {"vehicles": 8,  "walkers": 0,  "weather": "clear",    "frames": 150},
-    "S20": {"vehicles": 10, "walkers": 0,  "weather": "clear",    "frames": 150},
-    "S21": {"vehicles": 8,  "walkers": 0,  "weather": "clear",    "frames": 150},
-    "S22": {"vehicles": 6,  "walkers": 2,  "weather": "clear",    "frames": 150},
-    "S30": {"vehicles": 3,  "walkers": 5,  "weather": "night",    "frames": 150},
-    "S31": {"vehicles": 6,  "walkers": 0,  "weather": "rain",     "frames": 150},
-    "S32": {"vehicles": 5,  "walkers": 0,  "weather": "clear",    "frames": 150},
-    "S33": {"vehicles": 5,  "walkers": 6,  "weather": "glare",    "frames": 150},
+    "S00": {"vehicle_count": 3,  "pedestrian_count": 0,  "weather": "clear",    "frames": 100},
+    "S01": {"vehicle_count": 5,  "pedestrian_count": 0,  "weather": "clear",    "frames": 100},
+    "S02": {"vehicle_count": 3,  "pedestrian_count": 8,  "weather": "clear",    "frames": 100},
+    "S10": {"vehicle_count": 3,  "pedestrian_count": 5,  "weather": "clear",    "frames": 150},
+    "S11": {"vehicle_count": 6,  "pedestrian_count": 0,  "weather": "clear",    "frames": 150},
+    "S12": {"vehicle_count": 5,  "pedestrian_count": 2,  "weather": "clear",    "frames": 150},
+    "S13": {"vehicle_count": 8,  "pedestrian_count": 0,  "weather": "clear",    "frames": 150},
+    "S20": {"vehicle_count": 10, "pedestrian_count": 0,  "weather": "clear",    "frames": 150},
+    "S21": {"vehicle_count": 8,  "pedestrian_count": 0,  "weather": "clear",    "frames": 150},
+    "S22": {"vehicle_count": 6,  "pedestrian_count": 2,  "weather": "clear",    "frames": 150},
+    "S30": {"vehicle_count": 3,  "pedestrian_count": 5,  "weather": "night",    "frames": 150},
+    "S31": {"vehicle_count": 6,  "pedestrian_count": 0,  "weather": "rain",     "frames": 150},
+    "S32": {"vehicle_count": 5,  "pedestrian_count": 0,  "weather": "clear",    "frames": 150},
+    "S33": {"vehicle_count": 5,  "pedestrian_count": 6,  "weather": "glare",    "frames": 150},
 }
 
 WEATHER_PRESETS = {
@@ -127,24 +127,30 @@ def spawn_scenario_traffic(world, scenario_id: str, yaml_params: dict, seed: int
         walker_bps = bp_lib.filter("walker.pedestrian.*")
         walker_controller_bp = bp_lib.find("controller.ai.walker")
         for i in range(n_walkers):
-            for _try in range(10):
-                idx = random.randint(0, len(spawn_points) - 1)
-                bp = random.choice(walker_bps)
+            if not walker_bps:
+                break
+            bp = random.choice(walker_bps)
+            loc = None
+            for _try in range(30):
+                _loc = world.get_random_location_from_navigation()
+                if _loc is not None:
+                    loc = _loc
+                    break
+            if loc is None:
+                continue
+            try:
+                w = world.spawn_actor(bp, carla.Transform(loc))
                 try:
-                    loc = carla.Location(
-                        spawn_points[idx].location.x + random.uniform(-5, 5),
-                        spawn_points[idx].location.y + random.uniform(-5, 5),
-                        spawn_points[idx].location.z,
-                    )
-                    w = world.spawn_actor(bp, carla.Transform(loc))
-                    ctl = world.spawn_actor(walker_controller_bp, carla.Transform(), attach_to=w)
+                    ctl_tf = carla.Transform(carla.Location(loc.x, loc.y, loc.z + 1.0))
+                    ctl = world.spawn_actor(walker_controller_bp, ctl_tf, attach_to=w)
                     ctl.start()
                     ctl.go_to_location(world.get_random_location_from_navigation())
                     ctl.set_max_speed(1.0 + random.random())
                     spawned_walkers.append((w, ctl))
-                    break
-                except RuntimeError:
-                    continue
+                except Exception:
+                    spawned_walkers.append((w, None))
+            except RuntimeError:
+                continue
 
     print(f"  [traffic] spawned {len(spawned_vehicles)} vehicles, {len(spawned_walkers)} walkers")
     return spawned_vehicles, spawned_walkers
@@ -205,8 +211,8 @@ def run_smoke_test(map_name: str, scenario_id: str, port: int, gpu: int,
     # 2) 跑 5 阶段管线 (复用 run_phases_1_5.py)
     profile = SCENARIO_TRAFFIC_PROFILES.get(scenario_id, {})
     frames = profile.get("frames", 100)
-    n_vehicles = yaml_params.get("vehicle_count", profile.get("vehicles", 5))
-    n_walkers = yaml_params.get("pedestrian_count", profile.get("walkers", 2))
+    n_vehicles = yaml_params.get("vehicle_count", profile.get("vehicle_count", 5))
+    n_walkers = yaml_params.get("pedestrian_count", profile.get("pedestrian_count", 2))
 
     proc = subprocess.run(
         [

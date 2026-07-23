@@ -21,17 +21,17 @@ enabled_scenarios:
   - S32
   - S33
 scenario_parameters:
-  S00: {vehicle_count: 6, expected_violations: 0, road_type: suburban_mixed}
-  S01: {traffic_light_count: 8, green_ratio: 0.45}
-  S02: {pedestrian_count: 10, crosswalk_distance: 20.0}
-  S10: {pedestrian_appearance_sudden: true, appearance_distance: 12.0}
-  S11: {oncoming_vehicle_probability: 0.5}
-  S12: {red_light_violation_prob: 0.3}
-  S13: {follow_distance_min: 8.0, follow_distance_max: 25.0}
-  S20: {merge_lane_angle: 10.0, merge_speed_diff: 12.0}
-  S21: {vehicle_count: 4, priority_rules: yield_to_right}
-  S22: {emergency_vehicle_count: 1, emergency_priority: true}
-  S30: {night_mode: true, pedestrian_appearance_sudden: true, street_light_density: 0.7}
-  S31: {weather_rain: true, visibility_reduction: 0.35, road_wetness: 0.9}
-  S32: {construction_zone_length: 80.0, lane_reduction: 2, detour_sign_distance: 60.0}
-  S33: {backlight_angle: 200.0, pedestrian_group_size: 5, ambient_light: 0.15}
+  S00: {vehicle_count: 6, pedestrian_count: 0, expected_violations: 0, road_type: suburban_mixed}
+  S01: {vehicle_count: 7, pedestrian_count: 0, traffic_light_count: 8, green_ratio: 0.45}
+  S02: {vehicle_count: 4, pedestrian_count: 10, crosswalk_distance: 20.0}
+  S10: {vehicle_count: 4, pedestrian_count: 6, pedestrian_appearance_sudden: true, appearance_distance: 12.0}
+  S11: {vehicle_count: 8, pedestrian_count: 0, oncoming_vehicle_probability: 0.5}
+  S12: {vehicle_count: 7, pedestrian_count: 3, red_light_violation_prob: 0.3}
+  S13: {vehicle_count: 10, pedestrian_count: 0, follow_distance_min: 8.0, follow_distance_max: 25.0}
+  S20: {vehicle_count: 13, pedestrian_count: 0, merge_lane_angle: 10.0, merge_speed_diff: 12.0}
+  S21: {vehicle_count: 10, pedestrian_count: 0, priority_rules: yield_to_right}
+  S22: {vehicle_count: 8, pedestrian_count: 3, emergency_vehicle_count: 1, emergency_priority: true}
+  S30: {vehicle_count: 4, pedestrian_count: 6, night_mode: true, pedestrian_appearance_sudden: true, street_light_density: 0.7}
+  S31: {vehicle_count: 8, pedestrian_count: 0, weather_rain: true, visibility_reduction: 0.35, road_wetness: 0.9}
+  S32: {vehicle_count: 7, pedestrian_count: 0, construction_zone_length: 80.0, lane_reduction: 2, detour_sign_distance: 60.0}
+  S33: {vehicle_count: 7, pedestrian_count: 8, backlight_angle: 200.0, pedestrian_group_size: 5, ambient_light: 0.15}
