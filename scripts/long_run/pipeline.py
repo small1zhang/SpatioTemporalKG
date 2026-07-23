@@ -130,6 +130,27 @@ def process_chunks(
     from stk.rules.generator import RuleEnforcer
     from stk.dynamic.incremental_updater import IncrementalEngine
     from stk.storage.serializer import serialize_graph
+    from stk.config import EgoCentricConfig
+    from stk.filter.importance import ImportanceScorer
+    from stk.filter.edge_pruner import EdgePruner
+    from stk.filter.background_filter import BackgroundFilter
+
+    # 阶段 3 可选裁剪配置 (CLI 参数驱动, 默认全 None = 不过滤)
+    _importance_cfg = None
+    _background_cfg = None
+    _edge_pruner_cfg = None
+    _filter_ego_id = args.ego_id
+    if args.importance_threshold >= 0.0:
+        _ego_cfg = EgoCentricConfig.default()
+        _ego_cfg.importance_threshold = args.importance_threshold
+        _importance_cfg = ImportanceScorer(_ego_cfg)
+    if args.exclude_lanes:
+        _background_cfg = BackgroundFilter(EgoCentricConfig.default())
+    if args.prune_edges:
+        _ego_cfg = EgoCentricConfig.default()
+        if _importance_cfg is None:
+            _ego_cfg.importance_threshold = 0.30
+        _edge_pruner_cfg = EdgePruner(_ego_cfg)
 
     # ---- Phase 3-5 跨 chunk 状态 ----
     beh_gen = BehaviorRelationGenerator()
@@ -440,6 +461,10 @@ def process_chunks(
                 cross_layer_rels=all_cross_layer_rels_raw,
                 rule_out=all_ruleouts_raw,
                 coalesce_containment=coalesce_containment,
+                importance_cfg=_importance_cfg,
+                background_cfg=_background_cfg,
+                edge_pruner_cfg=_edge_pruner_cfg,
+                ego_id=_filter_ego_id,
             )
             n_nodes = len(graph_obj.get("nodes", []))
             n_edges = len(graph_obj.get("edges", []))
@@ -490,6 +515,10 @@ def process_chunks(
             cross_layer_rels=all_cross_layer_rels_raw,
             rule_out=all_ruleouts_raw,
             coalesce_containment=coalesce_containment,
+            importance_cfg=_importance_cfg,
+            background_cfg=_background_cfg,
+            edge_pruner_cfg=_edge_pruner_cfg,
+            ego_id=_filter_ego_id,
         )
         g_nodes = len(graph_obj.get("nodes", []))
         g_edges = len(graph_obj.get("edges", []))
@@ -606,6 +635,15 @@ def main():
     p.add_argument("--no-coalesce", action="store_true",
                    help="禁用边合并 (默认开启 coalesce_containment 以压缩 containsXXX 等冗余边). "
                         "禁用后退回逐帧 scenario_frame_F + 逐帧包含边的老行为")
+    # 阶段 3: 节点/边裁剪 (默认关闭, 显式 opt-in)
+    p.add_argument("--importance-threshold", type=float, default=-1.0,
+                   help="重要性打分阈值 (<0 表示关闭). 启用后低分实体在序列化时被剔除.")
+    p.add_argument("--ego-id", default=None,
+                   help="显式自车 entity_id, 用于重要性打分与 ROI (留空自动识别).")
+    p.add_argument("--exclude-lanes", action="store_true",
+                   help="启用静态背景外移: lane 节点/边不进 KG.")
+    p.add_argument("--prune-edges", action="store_true",
+                   help="启用边稀疏化: ROI 外 spatia/behavior 边被剔除.")
     args = p.parse_args()
 
     run_dir = Path(args.run_dir)
