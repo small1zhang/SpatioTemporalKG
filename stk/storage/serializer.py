@@ -2,7 +2,7 @@
 """Entity/Relation → Cypher 参数 (v3 §6.2.4)."""
 from __future__ import annotations
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from stk.ontology.entity import BaseEntity
 from stk.ontology.relation import BaseRelation
 from stk.dynamic.event_injector import inject_violation
@@ -53,7 +53,13 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
                     cross_layer_rels: List = None,
                     rule_out: Dict = None,
                     merge_violations: bool = True,
-                    coalesce_containment: bool = False) -> Dict[str, Any]:
+                    coalesce_containment: bool = False,
+                    importance_cfg: Optional["ImportanceScorer"] = None,
+                    background_cfg: Optional["BackgroundFilter"] = None,
+                    edge_pruner_cfg: Optional["EdgePruner"] = None,
+                    ego_id: Optional[str] = None,
+                    anomaly_ids: Optional[Dict[int, set]] = None,
+                    ) -> Dict[str, Any]:
     """把单帧 (或帧列表) 的场景快照序列化为 {nodes, edges} JSON.
 
     输入可以是:
@@ -138,6 +144,49 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
     sv_buffer: Dict[int, List] = {}
     ra_buffer: Dict[int, List] = {}
 
+    # ── 阶段3: 重要性打分 + ROI/pass 配置 (FE-12) ──
+    # 三道裁剪 pass 在每帧节点创建前预跑:
+    #   1. importance_cfg.score_frame(snap, ego_id, scene_rels, anomaly_ids[fid])
+    #   2. background_cfg.should_drop_entity(entity) → 跳过 lane 节点
+    #   3. edge_pruner_cfg.prune_edges(edges, ego_id, roi_ids, scores) → 后处理
+    importance_scores_per_frame: Dict[int, Dict[str, float]] = {}
+    roi_ids_per_frame: Dict[int, set] = {}
+    final_ego_id: Optional[str] = ego_id
+    if importance_cfg is not None:
+        # 第一遍: 给每帧的所有候选实体打分, 并提取 ego_id 与 ROI 子集
+        for snap in frames:
+            fid = snap.get("frame_id", 0)
+            scene_rels_for_frame = snap.get("scene_rels", []) or []
+            anom = (anomaly_ids or {}).get(fid, set())
+            scores = importance_cfg.score_frame(
+                snap, ego_id=final_ego_id,
+                scene_rels=scene_rels_for_frame,
+                anomaly_ids=anom,
+            )
+            importance_scores_per_frame[fid] = scores
+            # 自动识别 ego (若未显式提供): score==max 的 Vehicle, 且 is_ego / first
+            if final_ego_id is None:
+                vehicles = snap.get("vehicles", [])
+                for v in vehicles:
+                    if v.get("is_ego"):
+                        final_ego_id = str(v.get("entity_id") or v.get("id", ""))
+                        break
+                if final_ego_id is None and vehicles:
+                    # 退化: 取分数最高的车
+                    veh_scores = {
+                        str(v.get("entity_id") or v.get("id", "")): scores.get(
+                            str(v.get("entity_id") or v.get("id", "")), 0.0
+                        )
+                        for v in vehicles
+                    }
+                    if veh_scores:
+                        final_ego_id = max(veh_scores, key=veh_scores.get)
+            # ROI 子集: 所有 score >= threshold 的实体
+            roi_ids_per_frame[fid] = {
+                eid for eid, s in scores.items()
+                if s >= importance_cfg.threshold
+            }
+
     # ── 创建 ScenarioSnapshot 节点 ──
     # coalesce 模式下: 用一个全局 scenario 节点替代逐帧 scenario_frame_F
     # 非启发模式: 维持每帧 scenario_frame_F 节点 (向后兼容)
@@ -209,29 +258,52 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
 
     for snap in frames:
         fid = snap.get("frame_id", 0)
+        scores = importance_scores_per_frame.get(fid, {})
+        thr = importance_cfg.threshold if importance_cfg is not None else -1.0
+
+        def _keep_entity(eid: str) -> bool:
+            """重要性打分过滤: 分数 < threshold 的实体不进 KG."""
+            if importance_cfg is None:
+                return True
+            s = scores.get(eid)
+            return s is not None and s >= thr
+
+        def _keep_lane_entity(eid: str) -> bool:
+            """BackgroundFilter 跳过 lane 节点."""
+            if background_cfg is not None and eid in scores:
+                return False  # lane 节点由 BackgroundFilter 完全接管
+            return _keep_entity(eid)
 
         # --- Vehicles ---
         for v in snap.get("vehicles", []):
             eid = str(v.get("entity_id") or v.get("id", ""))
-            if not eid:
+            if not eid or not _keep_entity(eid):
                 continue
             if eid not in nodes:
-                nodes[eid] = {"id": eid, "type": v.get("entity_type", "Vehicle"),
-                              "first_frame": fid, "last_frame": fid,
-                              "attrs": _flatten_attrs(v)}
+                node = {"id": eid, "type": v.get("entity_type", "Vehicle"),
+                        "first_frame": fid, "last_frame": fid,
+                        "attrs": _flatten_attrs(v)}
+                if importance_cfg is not None and eid in scores:
+                    node["attrs"]["importance"] = round(scores[eid], 4)
+                nodes[eid] = node
             else:
                 nodes[eid]["last_frame"] = fid
                 _merge_attrs(nodes[eid]["attrs"], v)
+                if importance_cfg is not None and eid in scores:
+                    nodes[eid]["attrs"]["importance"] = round(scores[eid], 4)
 
         # --- Pedestrians ---
         for p in snap.get("pedestrians", []):
             eid = str(p.get("entity_id") or p.get("id", ""))
-            if not eid:
+            if not eid or not _keep_entity(eid):
                 continue
             if eid not in nodes:
-                nodes[eid] = {"id": eid, "type": p.get("entity_type", "Pedestrian"),
-                              "first_frame": fid, "last_frame": fid,
-                              "attrs": _flatten_attrs(p)}
+                node = {"id": eid, "type": p.get("entity_type", "Pedestrian"),
+                        "first_frame": fid, "last_frame": fid,
+                        "attrs": _flatten_attrs(p)}
+                if importance_cfg is not None and eid in scores:
+                    node["attrs"]["importance"] = round(scores[eid], 4)
+                nodes[eid] = node
             else:
                 nodes[eid]["last_frame"] = fid
                 _merge_attrs(nodes[eid]["attrs"], p)
@@ -239,7 +311,7 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
         # --- Traffic lights ---
         for tl in snap.get("traffic_lights", []):
             eid = str(tl.get("entity_id") or tl.get("id", ""))
-            if not eid:
+            if not eid or not _keep_entity(eid):
                 continue
             if eid not in nodes:
                 nodes[eid] = {"id": eid,
@@ -252,10 +324,13 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
                 if "state" in tl:
                     nodes[eid]["attrs"]["state"] = tl["state"]
 
-        # --- Lanes ---
+        # --- Lanes (FE-11: BackgroundFilter 可跳过) ---
         for ln in snap.get("lanes", []):
             eid = ln.get("entity_id")
             if eid is None:
+                continue
+            eid = str(eid)
+            if background_cfg is not None and background_cfg.should_drop_entity(ln):
                 continue
             if eid not in nodes:
                 nodes[eid] = {"id": eid, "type": ln.get("entity_type", "RoadElement"),
@@ -412,7 +487,7 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
                 _add_edge_and_target_node(edges, nodes, rel, fid, _scene_rel_factory,
                                           track_frames=track_frames)
 
-            # 隐式关系: 车辆在车道
+            # 隐式关系: 车辆在车道 (FE-11: BackgroundFilter 跳过 lane 节点)
             for v in snap.get("vehicles", []):
                 veh_id = v.get("entity_id") or v.get("id")
                 # 优先使用 current_lane_id (run_phases_1_5.py 已经拼好 road_X_lane_Y)
@@ -425,6 +500,11 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
                     elif raw_lane_id is not None:
                         lane_id = f"road_{raw_road_id}_lane_{raw_lane_id}"
                 if lane_id and veh_id:
+                    # FE-11: 若 BackgroundFilter 启用, 跳过 lane 节点与 in_lane 边
+                    if background_cfg is not None and \
+                       background_cfg.should_drop_entity(
+                           {"entity_id": str(lane_id), "entity_type": "RoadElement"}):
+                        continue
                     # 若车道节点不在已有集合中，自动补建一个最小 RoadElement 节点
                     if str(lane_id) not in nodes:
                         nodes[str(lane_id)] = {
@@ -493,6 +573,20 @@ def serialize_graph(frame_snapshot, with_relations: bool = True,
                     "frame_id": fid, "attrs": {"evidence_idx": idx},
                 }, fid)
 
+
+# ── 阶段3: 边稀疏化 (FE-12) ──
+    if edge_pruner_cfg is not None and final_ego_id:
+        roi_ids = roi_ids_per_frame.get(frames[-1].get("frame_id", 0), set())
+        scores = importance_scores_per_frame.get(frames[-1].get("frame_id", 0), {})
+        edge_list = list(edges.values())
+        kept_edges = edge_pruner_cfg.prune_edges(
+            edge_list, ego_id=final_ego_id,
+            roi_ids=roi_ids,
+            importance_scores=scores,
+        )
+        # 重建 edges dict (保留 key 结构以保证后处理引用)
+        kept_keys = {(e["src_id"], e["dst_id"], e["type"]) for e in kept_edges}
+        edges = {k: v for k, v in edges.items() if k in kept_keys}
 
     return {"nodes": list(nodes.values()), "edges": list(edges.values())}
 
