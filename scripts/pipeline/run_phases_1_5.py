@@ -88,6 +88,17 @@ def main():
     p.add_argument("--no-lanes", action="store_true")
     p.add_argument("--thresholds-json", type=str, default=None,
                    help="ThresholdConfig JSON 字符串覆盖默认阈值, 例如 {'ttc_critical':5.0}")
+    # 阶段 4: ego-centric spawn (FE-16)
+    p.add_argument("--ego-centric", action="store_true",
+                   help="以 ego 为中心、按椭圆范围生成 NPC (而非全图随机)")
+    p.add_argument("--spawn-offset", type=int, default=0,
+                   help="ego 起始 spawn_point 偏移 (0=第一点)")
+    p.add_argument("--npc-radius-front", type=float, default=70.0,
+                   help="ego-centric 模式中 NPC 前方半径 (m)")
+    p.add_argument("--npc-radius-rear", type=float, default=30.0,
+                   help="ego-centric 模式中 NPC 后方半径 (m)")
+    p.add_argument("--npc-radius-side", type=float, default=50.0,
+                   help="ego-centric 模式中 NPC 侧向半径 (m)")
     args = p.parse_args()
     if getattr(args, "thresholds_json", None):
         import json as _json
@@ -185,25 +196,86 @@ def main():
 
     spawned_vehicles = []
     spawned_walkers = []
+    ego = None  # FE-16: 显式 ego 引用
+    spawn_mode = "default"
     if not args.no_spawn:
-        print(f"[*] Spawning {args.vehicles} vehicles ...")
-        vehicle_bps = bp_lib.filter("vehicle.*")
-        spawn_points = map_.get_spawn_points()
-        used = set()
-        for _ in range(args.vehicles):
-            for _try in range(10):
-                idx = random.randint(0, len(spawn_points) - 1)
-                if idx in used: continue
-                bp = random.choice(vehicle_bps)
-                bp.set_attribute("role_name", "autopilot")
-                try:
-                    v = world.spawn_actor(bp, spawn_points[idx])
-                    v.set_autopilot(True)
-                    spawned_vehicles.append(v)
-                    used.add(idx)
-                    break
-                except RuntimeError: continue
-        print(f"[+] spawned {len(spawned_vehicles)} vehicles")
+        # FE-16: ego-centric 椭圆 spawn (与 collect.py 一致)
+        if getattr(args, "ego_centric", False):
+            print(f"[*] Spawning {args.vehicles} vehicles (ego-centric mode) ...")
+            vehicle_bps = bp_lib.filter("vehicle.*")
+            spawn_points = map_.get_spawn_points()
+            ego_offset = getattr(args, "spawn_offset", 0) or 0
+            if not (0 <= ego_offset < len(spawn_points)):
+                ego_offset = 0
+            ego_spawn_pt = spawn_points[ego_offset]
+            random.seed(args.seed)
+            ego_bp = random.choice(vehicle_bps)
+            ego_bp.set_attribute("role_name", "hero")
+            try:
+                ego = world.spawn_actor(ego_bp, ego_spawn_pt)
+                ego.set_autopilot(True)
+                spawned_vehicles = [ego]
+                spawn_mode = "ego_centric"
+                # 椭圆筛 NPC spawn_points
+                used = {ego_offset}
+                npc_targets = [pt for i, pt in enumerate(spawn_points)
+                               if i not in used]
+                # 椭圆判定
+                import math as _m
+                eyaw = _m.radians(ego_spawn_pt.rotation.yaw)
+                c, s = _m.cos(eyaw), _m.sin(eyaw)
+                def _in_ell(pt):
+                    dx = pt.location.x - ego_spawn_pt.location.x
+                    dy = pt.location.y - ego_spawn_pt.location.y
+                    lon = dx * c + dy * s
+                    lat = -dx * s + dy * c
+                    R_long = args.npc_radius_front if lon >= 0 else args.npc_radius_rear
+                    return (lon / R_long) ** 2 + (lat / args.npc_radius_side) ** 2 <= 1.0
+                in_ellipse = [pt for pt in npc_targets if _in_ell(pt)]
+                random.shuffle(in_ellipse)
+                npc_candidates = in_ellipse
+                needed = args.vehicles - 1
+                if len(npc_candidates) < needed:
+                    extra = [pt for pt in npc_targets if pt not in in_ellipse]
+                    extra.sort(key=lambda pt: abs(pt.location.x - ego_spawn_pt.location.x)
+                               + abs(pt.location.y - ego_spawn_pt.location.y))
+                    npc_candidates = in_ellipse + extra[: needed - len(in_ellipse)]
+                for pt in npc_candidates[:needed]:
+                    bp = random.choice(vehicle_bps)
+                    bp.set_attribute("role_name", "autopilot")
+                    try:
+                        v = world.spawn_actor(bp, pt)
+                        v.set_autopilot(True)
+                        spawned_vehicles.append(v)
+                    except RuntimeError: continue
+                print(f"[+] ego-centric spawn: ego@spawn_point[{ego_offset}], "
+                      f"npcs={len(spawned_vehicles)-1}")
+            except RuntimeError as e:
+                print(f"[!] ego-centric spawn failed ({e}), fallback to default")
+                ego = None
+                spawn_mode = "default"
+
+        if ego is None and not spawn_mode.startswith("ego_centric"):
+            # 默认 spawn 路径
+            print(f"[*] Spawning {args.vehicles} vehicles (first=ego=hero) ...")
+            vehicle_bps = bp_lib.filter("vehicle.*")
+            spawn_points = map_.get_spawn_points()
+            used = set()
+            for i in range(args.vehicles):
+                for _try in range(10):
+                    idx = random.randint(0, len(spawn_points) - 1)
+                    if idx in used: continue
+                    bp = random.choice(vehicle_bps)
+                    bp.set_attribute("role_name", "hero" if i == 0 else "autopilot")
+                    try:
+                        v = world.spawn_actor(bp, spawn_points[idx])
+                        v.set_autopilot(True)
+                        spawned_vehicles.append(v)
+                        used.add(idx)
+                        break
+                    except RuntimeError: continue
+            ego = spawned_vehicles[0] if spawned_vehicles else None
+            print(f"[+] spawned {len(spawned_vehicles)} vehicles")
 
         print(f"[*] Spawning {args.walkers} walkers ...")
         walker_bps = bp_lib.filter("walker.pedestrian.*")
@@ -233,7 +305,7 @@ def main():
     sensors_to_destroy = []
     if spawned_vehicles:
         try:
-            ego_for_sensor = spawned_vehicles[0]
+            ego_for_sensor = ego or spawned_vehicles[0]
             bp_lib = world.get_blueprint_library()
             col_bp = bp_lib.find("sensor.other.collision")
             li_bp = bp_lib.find("sensor.other.lane_invasion")
@@ -302,7 +374,7 @@ def main():
                     lane_info = (int(wp.road_id), int(wp.lane_id))
             except Exception: pass
             actor_dict = {
-                "is_ego": False,
+                "is_ego": (ego is not None and v.id == ego.id),
                 "type": "vehicle", "id": str(v.id), "type_id": v.type_id,
                 "location": {"x": t.location.x, "y": t.location.y, "z": t.location.z},
                 "rotation": {"pitch": t.rotation.pitch, "yaw": t.rotation.yaw, "roll": t.rotation.roll},
@@ -673,6 +745,7 @@ def main():
         "town": world.get_map().name, "tick_s": tick_s, "seed": args.seed,
         "cuda_visible_devices": gpu_env, "lane_waypoints_collected": len(lane_wps),
         "timings": timings, "total_time_s": sum(timings.values()),
+        "spawn_mode": spawn_mode,
     }
     with open(out_dir / "metadata.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
