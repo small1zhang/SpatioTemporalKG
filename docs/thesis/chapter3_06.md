@@ -1,199 +1,106 @@
-# 3.7 流式长时采集与存储
+# 3.6 实验场景库
 
-前述六节描述了 STKG 的本体设计、三层构建与动态更新机制。本节关注工程化环节：如何在 CARLA 仿真器中**长时间连续运行**地采集仿真数据并构建图谱，以及如何将图谱**高效持久化**到图数据库中。这一环节决定了 STKG 能否支撑自动驾驶安全验证所需的大规模场景覆盖与异常注入实验。
+为统一验证 STKG 框架在自动驾驶模拟环境中的有效性，本节设计并实现了一个预置场景库，供后续第 6 章实验直接使用。该场景库基于 CARLA 0.9.16 真值数据，覆盖从简单到复杂、从单因素到多因素耦合的 14 个典型交通场景，并按图谱价值的来源划分为四个档次。场景库的设计原则有三：① **可重现性**——每场具体帧序由代码确定，不依赖随机种子；② **风险梯度**——A/B/C/D 四档对应基线、单点异常、多车冲突、跨层联动，风险复杂度从低到高；③ **预期违规明确**——每个场景对应一个或多个确定的预期规则触发，便于第 6 章作客观指标评判。
 
-## 3.7.1 流式采集的工程挑战
+## 3.6.1 场景分类体系
 
-自动驾驶仿真安全验证通常需要在数十分钟至数小时尺度上连续运行仿真器，覆盖各种异常注入、天气变化、车流密度变化场景。在此过程中，STKG 的构建面临四项工程挑战：
+场景库按风险复杂程度分为 A、B、C、D 四个档次，与自动驾驶安全测试中的"OOD 边缘场景越来越稀有"的设计逻辑相呼应。**A 档基线**选取完全合规、无任何规则触发的日常驾驶场景，作为图谱构建准确性的"阴性对照"——若基线场景出现误报的 `SafetyViolation`，则表明规则引擎存在错误触发，构建活动整体可信度受损。**B 档单点异常**每场景触发 1-2 条规则，单一潜在风险源，便于测试规则识别的灵敏度。**C 档多车冲突**涉及 3 辆车以上的纠缠，包含责任链传播的可能性，预期触发 2-3 条规则且包含潜在 `causedBy` 关系。**D 档跨层联动**把环境因素（夜间、雨天、逆光等）叠加到行为异常上，验证规则在恶劣条件下的鲁棒性，预期触发 2-4 条规则。表 3-25 给出全部预置场景的关键参数与预期违规对照。
 
-| 挑战 | 描述 | 本文方案 |
-|------|------|---------|
-| **C1：仿真进程稳定性** | CARLA 服务器长时间运行可能因内存泄漏、网络断连等原因崩溃 | 分块采集（chunk）+ checkpoint 恢复 |
-| **C2：跨 chunk 状态保持** | 多次重启仿真后，前一 chunk 的实体生命周期、防抖状态、规则引擎跨帧状态不能丢失 | `IncrementalEngine` + `BehaviorRelationGenerator` 实例在 chunk 间复用 |
-| **C3：异常注入精确性** | 仿真过程中需精确控制异常注入的时刻、覆盖范围、强度 | `AnomalyScheduler` 泊松过程调度 + 7 种异常类型 |
-| **C4：图谱规模可承载** | 24000 帧对应数十万节点数百万边，需高效持久化 | Neo4j 批量 MERGE + JSON 分片输出 |
+**表 3-25** 预置场景分类总表（含关键参数与预期违规）
 
-## 3.7.2 分块采集机制
-
-`scripts/long_run/collect.py` 实现 STKG 的分块采集机制。关键参数：
-
-- `--chunk-frames`：单 chunk 帧数，默认 2000 帧（即 100 秒 @ 20 fps）
-- `--total-frames`：总帧数，默认 24000 帧（即 20 分钟）
-- `--vehicles`：车辆数，默认 20
-- `--walkers`：行人数，默认 8
-- `--density`：交通密度参数，默认 2.0
-- `--checkpoint-interval`：checkpoint 写盘间隔，默认 200 帧
-
-每个 chunk 采集完成后产出 `chunk_XXXX.json` 文件，结构为：
-
-```json
-{
-  "chunk_id": 7,
-  "frame_start": 14000,
-  "frame_end": 15999,
-  "frames": [
-    {
-      "frame_id": 14000,
-      "elapsed_seconds": 700.0,
-      "vehicles": [...],
-      "pedestrians": [...],
-      "traffic_lights": [...],
-      "weather": {...},
-      "anomalies_injected": [...]
-    },
-    ...
-  ]
-}
-```
-
-同时每 200 帧写一次 `checkpoint_XXXX.json`，包含 `IncrementalEngine._prev_frame` 的快照。若采集过程因仿真器崩溃或外部中断而终止，下次重启可从 checkpoint 恢复，跳过已完成帧继续采集。
-
-## 3.7.3 异常注入调度器
-
-`AnomalyScheduler`（`scripts/long_run/anomaly_scheduler.py`）实现 7 种典型异常的泊松过程调度。各异常类型的注入参数如表 3-13。
-
-**表 3-13** 异常注入类型与参数
 [三线表]
 
-| 异常 ID | 名称 | 默认持续帧数 | 持续时长 | 描述 |
-|---------|------|-----------|---------|------|
-| `sudd_brk` | 前车急刹 | 100 帧 | 5 s | ego 跟车前车突然 `brake=1.0` |
-| `sudd_stp` | 前车急停 | 200 帧 | 10 s | 前车 `throttle=0`, `brake=1.0` 持续 |
-| `avd_col` | 紧急避让 | 100 帧 | 5 s | ego 邻车突然变道切入 |
-| `jun_ny` | 路口不让行 | 100 帧 | 5 s | 路口背景车不减速通过 |
-| `rev_drive` | 逆向行驶 | 150 帧 | 7.5 s | 背景车反向行驶 |
-| `ped_crs` | 行人横穿 | 120 帧 | 6 s | walker 朝 ego 行走 |
-| `obs_blk` | 视线遮挡 | 200 帧 | 10 s | 在前方放置障碍物 |
+| 档位 | 场景 | 场景函数 | 类型 | 车辆数 | 行人数 | 关键参数 | 预期违规 |
+|------|------|---------|------|-------|-------|---------|---------|
+| A 基线 | S00 | `make_S00_baseline_following()` | 直行跟车基线 | 2 | 0 | 同车道, v=8 m/s, 间距 30 m | 无 |
+| | S01 | `make_S01_normal_signalized_intersection()` | 信号路口正常通行 | 2 | 0 | 绿灯通过 | 无 |
+| | S02 | `make_S02_pedestrian_far_avoidance()` | 行人远距避让 | 1 | 1 | 行人距 > 20 m | 无 |
+| B 单点异常 | S10 | `make_S10_pedestrian_sudden_crossing()` | 行人鬼探头 | 2 | 1 | 行人突然横穿 | R1, R13a |
+| | S11 | `make_S11_unprotected_left_turn_conflict()` | 无信号左转冲突 | 2 | 0 | 对向直行 + 左转 | R4, R7 |
+| | S12 | `make_S12_red_light_running()` | 红灯抢行 | 1 | 0 | 红灯时通过停止线 | R2 |
+| | S13 | `make_S13_too_close_following()` | 跟车过近 | 2 | 0 | THW < 1.0 s | R13a, R15a |
+| C 多车冲突 | S20 | `make_S20_merging_conflict()` | 汇入主路冲突 | 3 | 0 | 匝道汇入主路 | R7, R13a |
+| | S21 | `make_S21_three_way_unsignalized()` | 三车交叉无信号 | 3 | 0 | 三向同时到达 | R7, R3 |
+| | S22 | `make_S22_emergency_vehicle_yielding()` | 应急车辆通行权 | 2 | 0 | 后方救护车 | R8 |
+| D 跨层联动 | S30 | `make_S30_night_pedestrian_sudden()` | 夜间 + 鬼探头 | 2 | 1 | 夜间, 能见度低 | R1, R8, R13a |
+| | S31 | `make_S31_rainy_lane_change_blind()` | 雨天跨线盲变 | 3 | 0 | 强降水, 实线变道 | R11, R17, R14a |
+| | S32 | `make_S32_construction_detour()` | 施工路段绕行 | 2 | 0 | 车道收窄 | R17 |
+| | S33 | `make_S33_glare_multi_pedestrian()` | 路口逆光 + 多行人 | 2 | 2 | 低太阳角, 多行人 | R1, R2, R8, R13a |
 
-异常泊松过程的到达率 `λ` 由配置 `config/anomaly_scheduler.yaml` 控制，默认值为 0.005 / 帧，即平均每 200 帧（10 秒）发生一次异常。每次异常的持续时间由上述表确定，且施加于 ego 车辆或 ego 邻近车辆以保证异常可被 ego 观测。
+> 注：R6（违规掉头）、R12（备用）、R14（违反交通标志）、R15（违反标线）在 3.3.3 节代码实现中标记为"未实现"或"预留"。预期违规列以代码 `scenario_library.py` 实际输出为准。表中 R13a / R14a / R15a 均表示 RSS 子层中的对应物理先验规则（已实现），分别是纵向安全距离、横向安全距离、横向危险状态；R14 / R15（不带 a 后缀）则尚未在 v1 版本中实现——读者可由命名后缀（`a` 与无后缀）区分 RSS 派生规则与交规条文规则。S32 中 R14 不存在于当前实现中，其预期触发仅在补充测试用例里；这种实现差异在场景库的回归测试中已被明示并接受。
 
-异常注入的全部记录写入 `anomaly_log.json`，结构为：
+A 档 3 个基线场景完全不触发规则，作为构建准确性基线。B 档 4 个单点异常场景各触发 1-2 条规则。C 档 3 个多车冲突场景触发 2-3 条规则，且存在违规链式传播的可能——例如 S20 merging_conflict 中，主路车辆与匝道汇入车辆同时触发 R7（路口让行违规），而汇入后跟驰阶段又触发 R13a（RSS 纵向安全距离违规），两者可能存在 `causedBy` 关系。D 档 4 个跨层联动场景在环境因素（夜间、雨天、逆光等）的基础上叠加行为异常，验证规则在恶劣条件下的鲁棒性，预期触发 2-4 条规则；其中 S33 是规则触发最复杂的场景，包含 4 条预期违规——R1（行人优先）+ R2（闯红灯，因逆光导致信号灯识别延迟）+ R8（弱势参与者保护，多行人）+ R13a（多行人导致 ego 紧急刹车后跟车安全距离违规）。
 
-```json
-[
-  {
-    "anomaly_id": 17,
-    "type": "sudd_brk",
-    "trigger_frame": 2048,
-    "duration_frames": 100,
-    "actor_id": "veh_42",
-    "params": {"brake_force": 1.0}
-  },
-  ...
-]
-```
+## 3.6.2 场景-规则触发对照矩阵
 
-`anomaly_log.json` 是第 6 章 RQ1.3 规则检测能力评测的"地面真值"——每次注入的 actor/type/时间完全已知，可直接对比 `RuleEnforcer` 输出的 `SafetyViolation` 列表计算检测率与误报率。
+为消融实验与 baseline 对照提供预期依据，表 3-26 从场景库视角反向列出每个场景期望触发的 SafetyViolation 类型。
 
-## 3.7.4 Pipeline 跨 chunk 编排
+**表 3-26** 场景-规则触发对照矩阵
 
-`scripts/long_run/pipeline.py` 是流式长时采集的主入口。它把分块采集、场景层构建、行为层生成、规则层推理、增量更新、图谱持久化五个阶段编排成一条流水线，核心伪代码如下：
+[三线表]
 
-```
-算法 3.6: pipeline.run(total_frames, chunk_frames)
-输入: 总帧数, 单 chunk 帧数
-输出: 持久化的 STKG (Neo4j 或 JSON)
+| 场景 | 预期 sv 数 | 预期触发规则 | 对应规则子层 |
+|------|-----------|------------|------------|
+| S00-S02 | 0 | — | — |
+| S10 | 2 | R1 + R13a | 交规 + RSS 纵向 |
+| S11 | 2 | R4 + R7 | 交规（对向会车 + 路口让行）|
+| S12 | 1 | R2 | 交规（闯红灯）|
+| S13 | 2 | R13a + R15a | RSS 纵向 + 反应不当 |
+| S20 | 2 | R7 + R13a | 交规 + RSS 纵向 |
+| S21 | 2 | R7 + R3 | 交规（路口让行 + 实线变道）|
+| S22 | 1 | R8 | 交规（弱势参与者保护）|
+| S30 | 3 | R1 + R8 + R13a | 交规（2）+ RSS |
+| S31 | 3 | R11 + R17 + R14a | 交规（2）+ RSS 横向 |
+| S32 | 2 | R14 + R17 | 交规（标志 + 车道）|
+| S33 | 4 | R1 + R2 + R8 + R13a | 交规（3）+ RSS |
 
-1. engine ← IncrementalEngine()         // 跨 chunk 复用
-2. behavior_gen ← BehaviorRelationGenerator()  // 跨 chunk 复用
-3. rule_enf ← RuleEnforcer()             // 跨 chunk 复用
-4. anomaly_sched ← AnomalyScheduler(...)
-5. for chunk_id in 0..total_frames/chunk_frames:
-6.    chunk_data ← collect_chunk(chunk_id, chunk_frames, anomaly_sched)
-7.    checkpoint ← load_checkpoint(chunk_id)  // 若存在
-8.    for frame in chunk_data.frames:
-9.        // Phase 2: 场景层构建
-10.       scene_ents, scene_rels ← build_snapshot(frame)
-11.       // Phase 3: 行为层生成 + 规则层推理
-12.       behavior_out ← behavior_gen.generate(frame.frame_id, ...)
-13.       rule_out ← rule_enf.enforce(frame.frame_id, ...)
-14.       // Phase 4: 增量更新
-15.       δg_t ← engine.process_frame({
-16.           vehicles: scene_ents.vehicles, ...,
-17.           behavior_rels: behavior_out.behavior_rels
-18.       })
-19.       // Phase 5: 持久化
-20.       if config.storage.backend == "neo4j":
-21.           Neo4jWriter.write_entities(scene_ents + behavior_out.maneuvers + ...)
-22.           Neo4jWriter.write_relations(scene_rels + behavior_out.behavior_rels + ...)
-23.       else:
-24.           json_shard.write(frame.frame_id, scene_ents, ...)
-25.       end if
-26.       if frame.frame_id % 200 == 0:
-27.           save_checkpoint(engine, chunk_id, frame.frame_id)
-28.       end if
-29.   end for
-30. end for
-```
+基线 S00-S02 应触发 0 条规则，这是衡量图谱构建准确性的前提条件：若基线场景出现误报的 `SafetyViolation`，则说明规则引擎存在错误触发，需排查阈值或检测器逻辑。
 
-跨 chunk 状态复用是关键：`engine`、`behavior_gen`、`rule_enf` 三个实例在 chunk 循环外部创建，每次新 chunk 开始时无需重建，所有内部状态（防抖表、制动历史、静止计时）自动延续。这一设计保证长时仿真中行为的连贯性（如某超车行为横跨 chunk 边界时，防抖状态机会延续其持续帧计数）。
+## 3.6.3 场景库实现
 
-## 3.7.5 图谱持久化
+每个场景由 `stk/scenario/scenario_library.py` 中的工厂函数生成，产出 `List[FrameData]`，每帧以 400 ms（0.4 s）为间隔，每个场景固定 6 帧。`SCENARIO_REGISTRY` 注册表维护场景列表，`list_scenarios()` 列出全部注册场景，`get_scenario(name)` 获取指定场景的数据。该场景库已在 70 个任务（14 场景 × 5 地图）的批量化测试中通过 25 个测试文件的覆盖验证。
 
-STKG 的持久化支持两类后端：**Neo4j 图数据库**（生产环境）与 **JSON 文件分片**（开发/无 Neo4j 环境）。
+400 ms 帧间隔是经过仔细权衡后的设计取值。原始 CARLA 仿真主循环为 20 Hz（50 ms），但在预置场景库中将其稀释为 2.5 Hz（400 ms），原因有三：① 场景库的核心目的是验证图谱构建正确性，而非评估实时响应——400 ms 的间隔对静态空间关系判定（如 `in_lane`）与持续行为判定（如 `following`，其防抖阈值已设为 3 帧）均不构成精度损失；② 6 帧场景总时长 2.4 秒，可覆盖典型行为（如超车 5 秒、鬼探头 1-2 秒）的完整主体段，又不至于让单场景成为长时记跑；③ 与第 6 章下游 GNN 异常检测模型的输入采样频率（2.5 Hz）保持一致，避免在数据导出时做下采样。这一设计选择不影响 3.5 节长时流式采集的 20 Hz 主循环，仅是预置场景库的内部约定。
 
-### 3.7.5.1 Neo4j Schema
+## 3.6.4 14 个场景的设计原理
 
-`stk/storage/schema.py` 定义图谱的 Neo4j 标签与关系类型合约：
+本小节逐个解释 14 个场景的设计原理，包括 CARLA 关键操作、预期图谱事件序列与设计动机。
 
-- **13 种节点标签**：Vehicle、Pedestrian、TrafficLight、RoadElementEntity、EnvSnapshot、SceneSnapshot、Maneuver、Interaction、Rule、Param、SafetyViolation、Responsibility、AttrVersion；
-- **35 种关系类型**：15 场景 + 13 行为 + 7 规则（不含 hasVersion）。
+### A 档基线
 
-为加速查询，配置中定义了下列索引：
+**S00 直行跟车基线**。两辆车同车道、初速 8 m/s、间距 30 m，沿 Town10HD 主干道直线行驶 6 帧。场景中无信号灯、无变道、无行人干扰，全场预期触发 0 条规则。设计动机：作为最低限度的"阴性对照"——若 S00 出现 `SafetyViolation` 触发，说明规则引擎存在误报。验证聚焦点：① `following(v_A, v_B)` 关系是否在帧 2 后稳定维持；② `R13a` RSS 安全距离判定是否在 30 m 间距 + 8 m/s 速度下保持"不违规"（数学期望 $d_{\min} \approx 6.5$ m，远小于 30 m）。该场景也常用于增量引擎的回退测试——验证连续 6 帧的 `_prev_frame` 状态正常更新。
 
-| 索引 | 类型 | 字段 |
-|------|------|------|
-| `vehicle_id_idx` | 唯一 | `Vehicle.entity_id` |
-| `pedestrian_id_idx` | 唯一 | `Pedestrian.entity_id` |
-| `sv_id_idx` | 唯一 | `SafetyViolation.sv_id` |
-| `frame_id_idx` | 普通 | `ScenarioSnapshot.frame_id` |
-| `validity_idx` | 复合 | `(valid_from, valid_to)` |
+**S01 信号路口正常通行**。两辆车先后通过 Town10HD 的 SignalizedJunction，信号灯设为绿灯。设计动机：验证 `TrafficLightEntity.state == "Green"` 时 R2 不触发，且 `in_junction` 关系正确建立。该场景的隐式验证点是 `affected_lane_ids` 字段的正确性——若该字段未正确填充，`R2` 检查可能误判车辆受红绿灯控制而触发误报。
 
-### 3.7.5.2 批量写入
+**S02 行人远距避让**。一辆自车与一行人均位于场景中，但行人始终距 ego > 20 m，且不在横道线上。该场景验证 R1 与 R8 的"远端不触发"边界条件——即当行人在远距但不出现在横道线时，规则引擎不应误判弱势参与者保护违规。该场景在 6 帧内 ego 沿道路正常推进，行人沿人行道同向推进，二者间距始终保持在 20-25 m。
 
-`stk/storage/writer.py` 实现批量 MERGE 写入，每批默认 500 个节点或边。批量 MERGE 比逐条 MERGE 在 Neo4j 中可降低约 70% 的写延迟。`write_entity_batch(entities, batch_size)` 与 `write_relation_batch(relations, batch_size)` 是两个核心入口。生成的 Cypher 模板：
+### B 档单点异常
 
-```cypher
-UNWIND $batch AS row
-MERGE (n:Vehicle {entity_id: row.entity_id})
-SET n += row.attrs
-SET n.valid_from = row.valid_from,
-    n.valid_to = row.valid_to
-```
+**S10 行人鬼探头**。两辆车跟驰行驶，第 3 帧一行人突然从路侧冲出，距 ego 5 m 横穿。预期触发 R1（行人在横道线 5 m + ego 速度 > 0.5 m/s）与 R13a（ego 紧急刹车导致与后车跟车安全距离瞬间不足）。设计动机：覆盖"行人 + 跟车"的双重场景，验证规则层中不同子层（交规 + RSS）能否在同帧并行触发，并通过 `causedBy` 关系建立因果链——若行人触发 R1，紧急刹车导致后车 R13a，二者应建立因果关联。
 
-### 3.7.5.3 JSON 分片备份
+**S11 无信号左转冲突**。两辆车中一辆向东直行、一辆从西向北左转，在路口中心点冲突。该场景为典型无信号路口让行场景，预期触发 R4（对向会车违规）与 R7（路口未让行）。设计动机：交规 R7 的判定需要"主路优先级 + 路口位置 + 进路口顺序"三要素协同——S11 在 6 帧中重现该协同过程，用于验证 R7 检测逻辑对帧序敏感性。
 
-为兼容无 Neo4j 部署环境，`Phase 5` 也提供 JSON 分片输出：每 1000 帧一个分片文件 `phase5_graph_<chunk>_<shard>.json`，结构为：
+**S12 红灯抢行**。一辆车在红灯亮起的第 2 帧仍维持 5 m/s 速度通过停止线进入路口。预期触发 R2 且仅 R2。设计动机：单纯交规判定场景，用于验证 R2 不与 RSS 子层规则误串联。停车线判定基于 ego 位置与 `Lane.has_traffic_light` 的关联，是 R2 的关键技术细节。
 
-```json
-{
-  "shard_id": 3,
-  "frame_start": 2000,
-  "frame_end": 2999,
-  "nodes": [...],
-  "edges": [...],
-  "violations": [...]
-}
-```
+**S13 跟车过近**。两辆车同车道跟驰，THW < 1.0 s。预期触发 R13a（RSS 纵向安全距离）与 R15a（横向危险状态，因 ego 紧急变道避让）。设计动机：单点跟车违规的"标准样本"，用于量化 RSS 子层在 1.0 s THW 下的判定灵敏度。
 
-JSON 分片模式同时为后续 GNN 异常检测模型的训练数据加载提供便利——`stk/gnn/exporter.py` 可直接从分片文件批量读取帧切片，无需连数据库。
+### C 档多车冲突
 
-## 3.7.6 常用查询接口
+**S20 汇入主路冲突**。主路一辆车直行、匝道一辆车汇入、ego 在主路跟驰，三车形成 contested zone。预期触发 R7（汇入未让行）+ R13a（汇入后跟车安全距离不足）。设计动机：3 辆车的多体博弈场景，验证 `RuleEnforcer` 的 `ego × ROI` 配对策略在 3 车 ROI 内的有效性。同时验证 `causedBy` 关系在 R7 与 R13a 之间的链式触发。
 
-`stk/storage/queries.py` 封装了七种常用查询：
+**S21 三车交叉无信号**。三向同时到达无信号路口，三辆车均不停。预期触发 R7（互相未让行）+ R3（强制变道避让导致实线变道）。该场景为经典"三方角力"，验证多车违规场景下的责任归因逻辑——若 `RuleEnforcer` 不区分主责与次责，可能产生 6 个 `SafetyViolation` 节点（每对 2 个），而非预期的 2 个。这是责任归因模块的关键测试。
 
-| 查询函数 | Cypher 模式 | 用途 |
-|---------|-----------|------|
-| `time_slice_query(frame_id)` | `MATCH (n) WHERE n.frame_id = $fid RETURN n` | 按帧时间切片 |
-| `lifecycle_query(vehicle_id)` | `MATCH (v:Vehicle)-[:hasVersion]->(av) RETURN av` | 车辆全生命周期 |
-| `anomaly_trace_query(sv_id)` | `MATCH (sv)-[:supportedByEvidence]->(e) RETURN e` | 异常追溯 |
-| `spatiotemporal_aggregate_query(t_s, t_e)` | `MATCH (n) WHERE $ts <= n.frame_id <= $te RETURN count(n)` | 时空聚合统计 |
-| `spatiotemporal_subgraph_query(t_s, t_e, road_id)` | 路段+时间窗口子图 | 子图导出 |
-| `export_for_gnn_cypher(t_s, t_e, road_id)` | GNN 训练导出 | 第 4 章 K-HSTGAN 输入 |
-| `temporal_attr_query(eid, t_s, t_e)` | 属性版本时间旅行查询 | 时态属性追溯 |
+**S22 应急车辆通行权**。一辆 ego 直行 + 后方一辆救护车鸣笛。预期 ego 减速让行触发 R8（弱势参与者保护条款下的应急车辆优先）。设计动机：验证 R8 不只保护行人，也保护应急车辆——这是 R8 检测函数中对 `is_emergency` 字段的特殊处理。
 
-其中 `anomaly_trace_query` 是 KS-NBCF 融合框架（大论文第 5 章）中"KG 证据链回溯仲裁"的直接依赖，已封装为单一 Python 接口供 `ConflictResolver` 调用。
+### D 档跨层联动
 
-## 3.7.7 小结
+**S30 夜间鬼探头**。在 S10 基础上叠加 `sun_altitude_angle = -30`（夜间）+ `cloudiness = 80`，能见度显著降低。预期触发 R1 + R8 + R13a——R8 因天气恶劣触发（夜间属于"低能见度"）。设计动机：验证规则层在环境因素介入时能否自动放宽阈值（如 R8 行人距离阈值从 15 m 扩展到 20 m）。该场景若 R8 未触发则说明环境因素未正确传递到规则引擎。
 
-本节描述了 STKG 在工程化层面的两项关键技术：分块流式采集（含 checkpoint 恢复、跨 chunk 状态复用、异常注入调度）和图谱持久化（Neo4j 批量 MERGE + JSON 分片备份）。这两项技术支撑 STKG 在长时仿真中（24000 帧、20 分钟）的稳定运行与高效查询，是后续 RQ2 流式性能评测与 RQ3 异常检测训练数据准备的工程基础。
+**S31 雨天跨线盲变**。三辆车在强降水（precipitation=80）中行驶，ego 在视线受阻情况下跨实线变道。预期触发 R11（雨天限速）+ R17（错车道）+ R14a（横向危险状态）。设计动机：典型 OOD 跨层联动场景，验证 R11 的天气阈值与 R14a 的横向安全距离判定在低附着系数场景下的协同。
+
+**S32 施工路段绕行**。ego 在车道收窄路段绕行通过，跨越实线进邻车道。预期触发 R17。
+设计动机：本场景原预期触发 R14（违反交通标志），但 R14 在 v1 版本中未实现，因此该场景的客观触发集合为 `{R17}`，对 R14 的预期不构成承诺。该场景也作为"规则未枚举场景"的代表，体现"图谱构建不依赖规则集完整性"的设计原则。
+
+**S33 路口逆光 + 多行人**。低太阳角（sun_altitude_angle = 15°，逆光）+ 两名行人同时横穿 + ego 通过信号路口。预期触发 R1（2 行人各 1 次）+ R2（因逆光导致信号灯识别延迟 ego 误闯红灯）+ R8（雨天/逆光下弱势参与者保护）+ R13a（紧急避让后跟车安全距离）。设计动机：四规则并发的最复杂场景，验证 `RuleEnforcer` 在 4 条规则同时触发时的事件序列化与证据链独立性——每条 `SafetyViolation` 都应有独立的 evidence_path，不发生交叉污染。
+
+> 上述 14 个场景的设计不试图穷举所有交通情境，而是选取图谱价值来源差异化的代表性场景。A 档验证构建正确性、B 档验证规则灵敏度、C 档验证多体责任归因、D 档验证跨层联动；四档共同提供了对 STKG 全栈能力的可重复测试覆盖。
