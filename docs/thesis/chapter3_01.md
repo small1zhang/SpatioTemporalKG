@@ -10,28 +10,28 @@
 
 为引入时态，本文采用 **时态三元组**（Temporal Triple） 的扩展定义：
 
-$$
+\$$
 \tau := (s,\ p,\ o,\ t,\ [t_s, t_e],\ \mathbf{a},\ c)
 \tag{3.1}
-$$
+\$$
 
 其中 $s \in \mathcal{E}$ 为.subject、$o \in \mathcal{E}$ 为 object、$p \in \mathcal{R}$ 为谓词关系；$t \in \mathbb{N}^+$ 为采样帧号（与仿真 tick 对齐）；$[t_s, t_e]$ 为该三元组的有效时间区间（valid time），$t_s$ 为生效帧、$t_e$ 为失效帧（可空）；$\mathbf{a} \in \mathbb{R}^k$ 为附加属性向量（如距离、速度差等数值化证据）；$c \in [0,1]$ 为置信度。
 
 **时空动态知识图谱** 在此基础上引入演进机制：
 
-$$
+\$$
 \mathcal{STKG} := \big\langle\ \mathcal{E},\ \mathcal{R},\ \mathcal{A},\ \mathcal{T},\ \mathcal{P},\ \{G_t\}_{t=1}^{T}\ \big\rangle
 \tag{3.2}
-$$
+\$$
 
 其中 $\mathcal{E}$ 为实体类型集合、$\mathcal{R}$ 为关系类型集合、$\mathcal{A}$ 为属性集合、$\mathcal{T}$ 为时间索引集合、$\mathcal{P}$ 为公理约束集合（详见 3.2.2 节）；$\{G_t\}_{t=1}^{T}$ 为按帧组织的图序列，$G_t$ 表示第 $t$ 帧的瞬时认知状态，由该帧全部节点、边与时态信息构成。
 
 设 $\Delta g_t := G_t \ominus G_{t-1}$ 表示相邻两帧的差分图（详见 3.6.1 节形式化定义），则 STKG 的演进过程可写为：
 
-$$
+\$$
 G_t = G_{t-1} \oplus \Delta g_t,\quad t = 2, \dots, T
 \tag{3.3}
-$$
+\$$
 
 其中 $\oplus$ 为增量融合算子，满足公理 $A_7$（详见 3.2.2 节）。该递推形式是后续 3.6 节"动态更新机制"的理论基础。
 
@@ -53,17 +53,17 @@ $$
 
 自动驾驶仿真中实体进出场景频繁，车辆的"消失""再现""离开路口"等都需要在图上清晰区分。本文为每个实体引入 **节点生命周期** 模型，定义四状态有限状态机：
 
-$$
+\$$
 \text{NodeLifecycleStatus} := \{\textsf{CREATED},\ \textsf{ACTIVE},\ \textsf{STALE},\ \textsf{INACTIVE}\}
 \tag{3.4}
-$$
+\$$
 
 状态转移关系为：
 
-$$
+\$$
 \textsf{CREATED} \xrightarrow{\text{appear}} \textsf{ACTIVE} \xrightarrow{\text{timeout}} \textsf{STALE} \xrightarrow{\text{forget}} \textsf{INACTIVE}
 \tag{3.5}
-$$
+\$$
 
 具体语义：
 
@@ -142,6 +142,7 @@ $$
 依据 `stk/ontology/types.py` 的形式化定义，本文设计 14 种实体类型与 4 大类共 42 种关系类型。**表 3-1** 给出实体类型清单：
 
 **表 3-1** 实体类型与所属层级
+[三线表]
 
 | 实体类型 | 标签 | 所属层级 | 角色 |
 |---------|------|---------|------|
@@ -161,6 +162,7 @@ $$
 | `RESPONSIBILITY_ASSIGNMENT` | `Responsibility` | 规则层 | 责任归因 |
 
 **表 3-2** 关系类型清单（按四大类分组）
+[三线表]
 
 | 类别 | 关系数 | 典型关系 |
 |------|------|---------|

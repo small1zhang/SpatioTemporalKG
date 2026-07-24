@@ -6,7 +6,7 @@ Dempster-Shafer 证据理论（Dempster-Shafer Theory, D-S evidence theory）是
 
 D-S 理论从一个识别框架（Frame of Discernment, FoD）出发，定义为互斥且完备的命题集合：
 
-$$
+\$$
 \Theta = \{\theta_1, \theta_2, \ldots, \theta_N\}, \quad \theta_i \cap \theta_j = \emptyset \ (i \neq j), \quad \bigcup_{i=1}^{N} \theta_i = \Omega
 $$
 
@@ -15,7 +15,7 @@ $$
 $$
 \Theta = \{\text{anomaly}, \text{normal}\}
 \tag{2.15}
-$$
+\$$
 
 对应的焦元有四个：$\{a\}$（异常）、$\{n\}$（正常）、$\Theta$（不确定）、$\emptyset$（不可能）。
 
@@ -23,10 +23,10 @@ $$
 
 D-S 理论用基本概率指派函数（Basic Probability Assignment, BPA，又称质量函数 mass function）表达证据：
 
-$$
+\$$
 m: 2^{\Theta} \to [0, 1]
 \tag{2.16}
-$$
+\$$
 
 满足：（i）$m(\emptyset) = 0$；（ii）$\sum_{A \subseteq \Theta} m(A) = 1$。
 
@@ -40,17 +40,17 @@ $m(A)$ 表示证据**精确**支持命题 $A$ 的程度（而非支持 $A$ 的�
 
 **信任函数（Belief Function）**：证据**支持**命题 $A$ 的总置信度：
 
-$$
+\$$
 \text{Bel}(A) = \sum_{B \subseteq A} m(B)
 \tag{2.17}
-$$
+\$$
 
 **似然函数（Plausibility Function）**：证据**不反对**命题 $A$ 的总置信度：
 
-$$
+\$$
 \text{Pl}(A) = \sum_{B \subseteq \Theta, B \cap A \neq \emptyset} m(B) = 1 - \text{Bel}(\bar{A})
 \tag{2.18}
-$$
+\$$
 
 信任与似然构成对 $A$ 真值的区间估计 $[\text{Bel}(A), \text{Pl}(A)]$。区间宽度 $\text{Pl}(A) - \text{Bel}(A) = m(\Theta)$，恰好等于无知度。当两个证据源对命题 $A$ 都无知（$m_1(\Theta) = m_2(\Theta) = 1$），融合后仍无知——这是 D-S 理论合理性的体现。
 
@@ -58,22 +58,22 @@ $$
 
 Dempster 组合规则（Dempster's Rule of Combination）将两个独立证据的质量函数 $m_1, m_2$ 融合为 $m_{12}$：
 
-$$
+\$$
 m_{12}(A) = \frac{1}{1 - K} \sum_{B \cap C = A} m_1(B) \cdot m_2(C), \quad A \neq \emptyset
 \tag{2.19}
-$$
+\$$
 
-$$
+\$$
 m_{12}(\emptyset) = 0
 \tag{2.20}
-$$
+\$$
 
 其中冲突系数 $K$ 表示两证据的矛盾程度：
 
-$$
+\$$
 K = \sum_{B \cap C = \emptyset} m_1(B) \cdot m_2(C)
 \tag{2.21}
-$$
+\$$
 
 冲突系数 $K \in [0, 1]$：
 - $K = 0$：两证据无矛盾；
@@ -92,27 +92,27 @@ $$
 
 对于第 5 章实际使用的二分类 $\Theta = \{a, n\}$，每个证据源可写为三元组 $(m(\{a\}), m(\{n\}), m(\Theta))$。给两个源 $(m_1^a, m_1^n, m_1^\Theta)$ 与 $(m_2^a, m_2^n, m_2^\Theta)$，Dempster 组合的解析形式如下：
 
-$$
+\$$
 m_{12}(\{a\}) = \frac{m_1^a \cdot m_2^a + m_1^a \cdot m_2^\Theta + m_1^\Theta \cdot m_2^a}{1 - K}
 \tag{2.22}
-$$
+\$$
 
-$$
+\$$
 m_{12}(\{n\}) = \frac{m_1^n \cdot m_2^n + m_1^n \cdot m_2^\Theta + m_1^\Theta \cdot m_2^n}{1 - K}
 \tag{2.23}
-$$
+\$$
 
-$$
+\$$
 m_{12}(\Theta) = \frac{m_1^\Theta \cdot m_2^\Theta}{1 - K}
 \tag{2.24}
-$$
+\$$
 
 其中冲突系数：
 
-$$
+\$$
 K = m_1^a \cdot m_2^n + m_1^n \cdot m_2^a
 \tag{2.25}
-$$
+\$$
 
 公式 (2.22)–(2.25) 是第 5 章 §5.4 算法 5.4（`ConflictResolver.resolve`）的核心计算式。
 
@@ -120,6 +120,7 @@ $$
 
 ![三线表]
 **表 2-4** D-S 证据理论工具与第 5 章设计对应
+[三线表]
 
 | 本节理论工具 | 第 5 章对应设计 | 节号 |
 |------------|---------------|------|

@@ -6,44 +6,44 @@
 
 在第 3.1.1 节中我们曾给出公式 (3.3)：$G_t = G_{t-1} \oplus \Delta g_t$。本节给出 $\Delta g_t$ 的形式化定义——**差分图**（DeltaGraph）：
 
-$$
+\$$
 \Delta g_t := \big\langle\ \Delta_{\mathcal{E}}(t),\ \Delta_{\mathcal{A}}(t),\ \Delta_{\mathcal{R}}(t),\ \mathcal{E}_{\text{rule}}(t)\ \big\rangle
 \tag{3.13}
-$$
+\$$
 
 四个分量分别对应四类更新动作：
 
 **① 实体级差分 $\Delta_{\mathcal{E}}(t)$**：本帧相对上一帧的实体集合差分，由 `DiffSet` 三集合表示：
 
-$$
+\$$
 \Delta_{\mathcal{E}}(t) = \big(\ \mathcal{E}_{t}^{\text{added}},\ \mathcal{E}_{t}^{\text{removed}},\ \mathcal{E}_{t}^{\text{unchanged}}\ \big)
 \tag{3.14}
-$$
+\$$
 
 其中 $\mathcal{E}_{t}^{\text{added}} = \mathcal{E}_t \setminus \mathcal{E}_{t-1}$ 为本帧新进入场景的实体集合，$\mathcal{E}_{t}^{\text{removed}} = \mathcal{E}_{t-1} \setminus \mathcal{E}_t$ 为本帧离开场景的实体集合，$\mathcal{E}_{t}^{\text{unchanged}} = \mathcal{E}_t \cap \mathcal{E}_{t-1}$ 为持续存在的实体集合。注意，"removed"在 STKG 中并不从图中删除，而是触发对应节点的生命周期状态从 `ACTIVE` 转移到 `STALE`（满足公理 $A_7$）。
 
 **② 属性级差分 $\Delta_{\mathcal{A}}(t)$**：本帧相对上一帧的属性值变化集合，结构为：
 
-$$
+\$$
 \Delta_{\mathcal{A}}(t) = \Big\{\ \big(e,\ a,\ (\text{val}_{t-1},\ \text{val}_t)\big)\ \Big|\ e \in \mathcal{E}_{t}^{\text{unchanged}},\ a \in \mathcal{A},\ |\text{val}_t - \text{val}_{t-1}| > \epsilon_{\text{thresh}}\ \Big\}
 \tag{3.15}
-$$
+\$$
 
 其中 $\epsilon_{\text{thresh}}$ 是属性防抖阈值（默认 0.01），用以过滤 CARLA 物理仿真中微小的浮点抖动，避免产生大量无意义版本。对涉及位置、速度等连续值的属性，阈值由 `ThresholdConfig` 控制。
 
 **③ 关系级差分 $\Delta_{\mathcal{R}}(t)$**：本帧相对上一帧的关系集合差分，结构与实体级差分类似，由 `_relation_key(src_id, dst_id, type, frame_id)` 做唯一性判定：
 
-$$
+\$$
 \Delta_{\mathcal{R}}(t) = \big(\ \mathcal{R}_{t}^{\text{added}},\ \mathcal{R}_{t}^{\text{removed}},\ \mathcal{R}_{t}^{\text{unchanged}}\ \big)
 \tag{3.16}
-$$
+\$$
 
 **④ 规则事件 $\mathcal{E}_{\text{rule}}(t)$**：本帧规则层新触发的 `SafetyViolation`、`ResponsibilityAssignment` 及其相关边组成的列表：
 
-$$
+\$$
 \mathcal{E}_{\text{rule}}(t) = \big[\ \text{sv}_1,\ \text{sv}_2,\ \dots,\ \text{sv}_k,\ \text{resp}_1,\ \dots,\ \text{resp}_l\ \big]
 \tag{3.17}
-$$
+\$$
 
 四类组合形成 $\Delta g_t$ 的完整形式化定义。该定义直接对应代码 `DeltaGraph` 的 dataclass 字段：`delta_entities`、`delta_attrs`、`delta_relations`、`rule_events`。
 
@@ -98,10 +98,10 @@ $$
 
 `VersionManager`（`stk/dynamic/version.py`）管理属性级时态。其数据结构为 `Dict[entity_id, Dict[attr_name, List[AttrVersion]]]`，每个 `AttrVersion` 记录一个属性值的版本：
 
-$$
+\$$
 \text{AttrVersion} = (\text{value},\ \text{valid\_from},\ \text{valid\_to})
 \tag{3.18}
-$$
+\$$
 
 `VersionManager` 主要接口：
 
@@ -126,10 +126,10 @@ RETURN av.value
 
 规则层单帧触发往往信息有限，复杂事件需要跨多帧聚合观察。`TimeWindowAggregator`（`stk/dynamic/time_window.py`）实现了一个简单的滑动窗口聚合器：
 
-$$
+\$$
 \text{SummaryEvent}(t_s, t_e) = \big\langle\ t_s,\ t_e,\ n_{\text{violation}},\ \text{max\_severity},\ \{\text{rule\_codes}\},\ \{\text{actors}\}\ \big\rangle
 \tag{3.19}
-$$
+\$$
 
 默认窗口大小 30 帧（即 1.5 秒 @ 20 fps），滑动步长 1 帧。聚合器在每帧调用 `add(frame_id, violations)`，每窗口结束输出 `SummaryEvent`。该窗口聚合是超车、连续变道、长时跟车等复杂行为分析的基础。
 
@@ -161,6 +161,7 @@ $$
 表 3-12 对比 STKG 与传统静态知识图谱在时态管理上的差异。
 
 **表 3-12** STKG 与静态知识图谱时态管理对比
+[三线表]
 
 | 维度 | 静态 KG | STKG |
 |------|---------|------|

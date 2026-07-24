@@ -4,10 +4,10 @@
 
 标准 GAT（Veličković et al. [2018]）对节点 $i$ 的邻居 $j$ 计算注意力权重：
 
-$$
+\$$
 \alpha_{ij}\ =\ \sigma\big(\ \mathbf{a}^{\top}\big[\ \mathbf{W}\mathbf{h}_i\ \|\ \mathbf{W}\mathbf{h}_j\ \big]\ \big)
 \tag{4.3}
-$$
+\$$
 
 其中 $\mathbf{W}$ 为共享权重矩阵，$\mathbf{a}$ 为注意力向量，$\sigma$ 为 LeakyReLU 激活。该公式的核心假设是"所有邻居通过同一注意力通道被关注"。但 STKG 场景层的 15 种关系对异常检测的判别价值差异显著：`ahead_of` 关系对跟车异常判别至关重要，`adjacent_lane` 仅用作拓扑参考，`weather_context` 与异常无直接物理联系。把所有关系塞进同一个注意力通道将损失大量先验信息。
 
@@ -23,42 +23,42 @@ $$
 
 对每个关系通道 $k$，独立计算注意力权重：
 
-$$
+\$$
 \mathbf{e}_{ij}^{(k)}\ =\ \mathrm{LeakyReLU}\Big(\ \mathbf{a}_k^{\top}\big[\ \mathbf{W}_k \mathbf{h}_i\ \|\ \mathbf{W}_k \mathbf{h}_j\ \big]\ \Big)
 \tag{4.4}
-$$
+\$$
 
 其中 $\mathbf{W}_k \in \mathbb{R}^{F' \times F}$ 为该通道的线性变换矩阵，$\mathbf{a}_k$ 为该通道的注意力向量。通道间权重不共享。该机制使 `ahead_of` 关系拥有独立的注意力参数空间，与 `beside`、`nearby_pedestrian` 等关系互不干扰。
 
 经 softmax 归一化（沿 $j$ 维）得到注意力系数：
 
-$$
+\$$
 \alpha_{ij}^{(k)}\ =\ \frac{\exp\big(\mathbf{e}_{ij}^{(k)}\big)}{\sum_{j' \in \mathcal{N}_k(i)} \exp\big(\mathbf{e}_{ij'}^{(k)}\big)}
 \tag{4.5}
-$$
+\$$
 
 其中 $\mathcal{N}_k(i)$ 是节点 $i$ 在第 $k$ 类关系下的邻居集合。每个通道的节点更新：
 
-$$
+\$$
 \mathbf{h}_i^{(k)}\ =\ \sigma\!\left(\ \sum_{j \in \mathcal{N}_k(i)} \alpha_{ij}^{(k)}\, \mathbf{W}_k \mathbf{h}_j\ \right)
 \tag{4.6}
-$$
+\$$
 
 ### 4.2.2.3 关系先验加权融合
 
 15 个通道输出 $\{\mathbf{h}_i^{(1)}, \dots, \mathbf{h}_i^{(K)}\}$ 经加权融合得到该层最终节点嵌入：
 
-$$
+\$$
 \mathbf{h}_i^{\text{spatial}}\ =\ \sum_{k=1}^{K} \beta_k\, \mathbf{h}_i^{(k)}
 \tag{4.7}
-$$
+\$$
 
 其中 $\beta_k$ 是关系 $k$ 的融合权重，由先验向量与门控函数联合决定：
 
-$$
+\$$
 \beta_k\ =\ \frac{\exp\!\big(\ \gamma_k + g_k(\mathbf{h}_i)\ \big)}{\sum_{k'=1}^{K} \exp\!\big(\ \gamma_{k'} + g_{k'}(\mathbf{h}_i)\ \big)}
 \tag{4.8}
-$$
+\$$
 
 其中：
 
@@ -70,6 +70,7 @@ $$
 关系先验的初始值由 STKG 设计经验给出，体现"哪些关系对异常检测更重要"：
 
 **表 4-1** 场景关系先验权重（初始 $\gamma_k$）
+[三线表]
 
 | 类别 | 关系 | 初始 $\gamma_k$ | 理由 |
 |------|------|----------------|------|
@@ -95,26 +96,26 @@ $$
 
 借鉴 GAT 的多头机制，本节在每个关系通道内独立使用 $H$ 个注意力头：
 
-$$
+\$$
 \mathbf{h}_i^{(k)}\ =\ \big\|\_{h=1}^{H}\ \sigma\!\left(\ \sum_{j \in \mathcal{N}_k(i)} \alpha_{ij}^{(k,h)}\, \mathbf{W}_k^{(h)} \mathbf{h}_j\ \right)
 \tag{4.9}
-$$
+\$$
 
 实验中默认 $H = 4$，每个头输出维度 $F' / H = 16$，总输出维度 $F' = 64$。多头输出在最后一层做平均而非拼接：
 
-$$
+\$$
 \mathbf{h}_i^{(k),\text{final}}\ =\ \frac{1}{H} \sum_{h=1}^{H} \mathbf{h}_i^{(k,h)}
 \tag{4.10}
-$$
+\$$
 
 ## 4.2.3 复杂度分析
 
 RGAT 单层前向计算复杂度：
 
-$$
+\$$
 \mathcal{O}\!\left(\ K \cdot H \cdot |\mathcal{E}|\cdot F'\ \right)
 \tag{4.11}
-$$
+\$$
 
 其中 $|\mathcal{E}|$ 为图的总边数。与传统 GAT 的复杂度 $\mathcal{O}(H \cdot |\mathcal{E}| \cdot F')$ 相比，RGAT 引入了 $K = 10$ 倍的常数因子。但得益于 STKG 关系的稀疏性（每帧平均 $|\mathcal{E}| \approx 4.2 \times 10^3$），实际单帧前向延迟与传统 GAT 在同规模无关系区分的图上相当。第 6 章 RQ2.1 实测数据将验证这一论断。
 
@@ -122,10 +123,10 @@ $$
 
 RE-GCN [Li et al., SIGIR 2021] 同样在关系种类丰富的情况下做图卷积，但其对所有关系做"统一变换 + 拼接"，缺乏先验加权机制：
 
-$$
+\$$
 \mathbf{h}_i^{\text{RE-GCN}}\ =\ \sum_{k=1}^{K} \sum_{j \in \mathcal{N}_k(i)} \frac{1}{|\mathcal{N}_k(i)|}\ \mathbf{W}_k \mathbf{h}_j
 \tag{4.12}
-$$
+\$$
 
 对比 RGAT 公式 (4.4)-(4.8)，可看出 RGAT 在三方面优于 RE-GCN：
 

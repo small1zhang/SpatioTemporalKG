@@ -14,10 +14,10 @@
 
 设 $[ \mathbf{h}_t^{\text{spatial}} \in \mathbb{R}^{N \times F'}]_{t=1}^T$ 为 RGAT 在 $T$ 帧窗口内输出的空间嵌入序列。标准 LSTM 逐帧处理序列：
 
-$$
+\$$
 \mathbf{c}_t,\ \mathbf{h}_t^{\text{LSTM}}\ =\ \mathrm{LSTM}_{\theta}\!\left(\ \mathbf{h}_t^{\text{spatial}},\ \mathbf{c}_{t-1},\ \mathbf{h}_{t-1}^{\text{LSTM}}\ \right)
 \tag{4.13}
-$$
+\$$
 
 其中 $\mathbf{c}_t$ 与 $\mathbf{h}_t^{\text{LSTM}}$ 分别为 LSTM 单元的状态向量与隐藏向量，$\theta$ 为 LSTM 参数。
 
@@ -27,24 +27,24 @@ $$
 
 将 $\Delta g_t$ 编码为门控向量 $\mathbf{\delta}_t$：
 
-$$
+\$$
 \mathbf{\delta}_t\ =\ \mathrm{MLP}_{\delta}\!\left(\ \big[\ \text{sum}(\Delta_{\mathcal{E}}.added),\ \text{sum}(\Delta_{\mathcal{E}}.removed),\ \|\Delta_{\mathcal{A}}\|_F,\ \text{sum}(\Delta_{\mathcal{R}}.added)\ \big]\ \right)
 \tag{4.14}
-$$
+\$$
 
 其中 $\|\Delta_{\mathcal{A}}\|_F$ 是属性差分的 Frobenius 范数，四维输入拼接后由单层 MLP 映射至 $F'$ 维。
 
 门控与 LSTM 状态更新整合为：
 
-$$
+\$$
 \mathbf{g}_t^{\text{in}}\ =\ \sigma\!\left(\ \mathbf{W}_{\text{in}}\,[\,\mathbf{h}_t^{\text{spatial}},\ \mathbf{\delta}_t\,]\ +\ \mathbf{b}_{\text{in}}\ \right) \odot \text{sigmoid}(\mathbf{W}_{\text{gate}}\,\mathbf{\delta}_t)
 \tag{4.15}
-$$
+\$$
 
-$$
+\$$
 \mathbf{c}_t,\ \mathbf{h}_t^{\text{LSTM}}\ =\ \mathrm{LSTM}_{\theta}\!\left(\ \mathbf{g}_t^{\text{in}},\ \mathbf{c}_{t-1},\ \mathbf{h}_{t-1}^{\text{LSTM}}\ \right)
 \tag{4.16}
-$$
+\$$
 
 关键在公式 (4.15) 中 $\text{sigmoid}(\mathbf{W}_{\text{gate}}\,\mathbf{\delta}_t)$ 项：当 $\mathbf{\delta}_t \approx \mathbf{0}$（帧间无变化），该 sigmoid 输出接近 $\mathbf{0}$，门控输入趋近 $\mathbf{0}$，LSTM 输入权重被压制，状态几乎不更新 → 等价于"跳过该帧"。当 $\mathbf{\delta}_t$ 非零（有实体/属性/关系变化），sigmoid 输出接近 $\mathbf{1}$，LSTM 正常处理该帧。
 
@@ -56,22 +56,22 @@ LSTM 输出 $\{\mathbf{h}_1^{\text{LSTM}}, \dots, \mathbf{h}_T^{\text{LSTM}}\}$ 
 
 行为级注意力利用 InteractionEvent 节点的 `frame_start` 和 `frame_end` 自动构建行为窗口：
 
-$$
+\$$
 \mathcal{W}_b = [t_{\text{start}}^{(b)},\ t_{\text{end}}^{(b)}],\quad b = 1, \dots, B
 \tag{4.17}
-$$
+\$$
 
 对每个行为窗口 $\mathcal{W}_b$：
 
-$$
+\$$
 \mathbf{\alpha}_b^{\text{beh}}\ =\ \text{softmax}_{t \in \mathcal{W}_b}\!\left(\ \mathbf{a}_{\text{beh}}^{\top}\,\tanh\!\big(\ \mathbf{W}_{\text{beh}}\,\mathbf{h}_t^{\text{LSTM}} + \mathbf{b}_{\text{beh}}\ \big)\ \right)
 \tag{4.18}
-$$
+\$$
 
-$$
+\$$
 \mathbf{h}_b^{\text{behavior}}\ =\ \sum_{t \in \mathcal{W}_b} \alpha_{b,t}^{\text{beh}}\ \mathbf{h}_t^{\text{LSTM}}
 \tag{4.19}
-$$
+\$$
 
 $B$ 为当前窗口内全部行为事件数。当当前窗口无行为事件（$B = 0$）时，行为级注意力退化为对全部 $T$ 帧的均匀注意力。
 
@@ -81,29 +81,29 @@ $B$ 为当前窗口内全部行为事件数。当当前窗口无行为事件（$
 
 帧级 LSTM 的输出 $\mathbf{h}_t^{\text{LSTM}}$ 与行为级注意力输出 $\mathbf{h}_b^{\text{behavior}}$ 在上述两层处理后，段落向量加总后输入场景级 Transformer 自注意力层：
 
-$$
+\$$
 \mathbf{H}_{\text{seq}}\ =\ \text{Concat}\!\big(\ \mathbf{h}_1^{\text{LSTM}},\ \dots,\ \mathbf{h}_T^{\text{LSTM}},\ \mathbf{h}_1^{\text{behavior}},\ \dots,\ \mathbf{h}_B^{\text{behavior}}\ \big)
 \tag{4.20}
-$$
+\$$
 
-$$
+\$$
 \mathbf{Q},\ \mathbf{K},\ \mathbf{V}\ =\ \mathbf{H}_{\text{seq}}\mathbf{W}_Q,\ \mathbf{H}_{\text{seq}}\mathbf{W}_K,\ \mathbf{H}_{\text{seq}}\mathbf{W}_V
 \tag{4.21}
-$$
+\$$
 
-$$
+\$$
 \text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V})\ =\ \text{softmax}\!\left(\ \frac{\mathbf{Q}\mathbf{K}^{\top}}{\sqrt{d_k}}\ \right) \mathbf{V}
 \tag{4.22}
-$$
+\$$
 
 场景级注意力的参数规模并未显著增加（$\mathbf{W}_Q, \mathbf{W}_K, \mathbf{W}_V$ 维度为 $F' \times d_k$，默认 $d_k = 32$），但由于涉及 $\mathbf{H}_{\text{seq}}$ 的全体自注意力，其复杂度为 $\mathcal{O}((T+B)^2 d_k)$。典型情况下 $T=30$，$B \leq 5$，即约 $35 \times 35 = 1225$ 个注意力位置，单帧开销完全可接受。
 
 场景级自注意力的输出 $\mathbf{H}_{\text{transformer}} \in \mathbb{R}^{(T+B) \times d_k}$ 中仅取其"最后一帧"行（即第 $T$ 帧的 $\mathbf{h}_T^{\text{LSTM}}$ 对应的输出）作为该窗口的时序特征摘要 $\mathbf{h}^{\text{temporal}}$：
 
-$$
+\$$
 \mathbf{h}^{\text{temporal}}\ =\ \mathbf{H}_{\text{transformer}}[T-1,:]
 \tag{4.23}
-$$
+\$$
 
 这是 4.5 节融合层的直接输入之一。
 
@@ -158,6 +158,7 @@ $$
 表 4-2 总结了 DHLSTM-Attn 与标准 LSTM 在时序编码能力上的差异。
 
 **表 4-2** DHLSTM-Attn 与标准 LSTM 对比
+[三线表]
 
 | 维度 | 标准 LSTM | DHLSTM-Attn |
 |------|---------|-------------|

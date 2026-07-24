@@ -14,10 +14,10 @@ $\phi_{\text{feat}}$ 将规则知识注入 GNN 特征空间，$\phi_{\text{loop}
 
 D-S 框架的识别框架（Frame of Discernment）定义为：
 
-$$
+\$$
 \Theta = \{\, \text{anomaly},\ \neg\text{anomaly} \,\}
 \tag{5.8}
-$$
+\$$
 
 焦元（Focal Element）定义为 $\Theta$ 的幂集 $\{ \{\text{anomaly}\},\ \{\neg\text{anomaly}\},\ \Theta \}$。
 
@@ -25,20 +25,20 @@ $$
 
 设当前帧 $t$ 规则引擎输出的最大严重度为 $s_t = \max_i \text{severity}_i(v_i)$，定义：
 
-$$
+\$$
 m_{\text{rule}}\big(\{\text{anomaly}\}\big) = s_t \cdot \mathbb{1}[\,\exists_i \text{rule}_i \text{ triggers}\,]
 \tag{5.9}
-$$
+\$$
 
-$$
+\$$
 m_{\text{rule}}\big(\{\neg\text{anomaly}\}\big) = (1 - s_t) \cdot \mathbb{1}[\,\exists_i \text{rule}_i \text{ triggers}\,]
 \tag{5.10}
-$$
+\$$
 
-$$
+\$$
 m_{\text{rule}}(\Theta) = 1 - m_{\text{rule}}(\{\text{anomaly}\}) - m_{\text{rule}}(\{\neg\text{anomaly}\})
 \tag{5.11}
-$$
+\$$
 
 当无规则触发时，$m_{\text{rule}}(\{\text{anomaly}\}) = 0$，$m_{\text{rule}}(\Theta) = 1$——所有质量分配给"不确定性"，表示规则无法判断。
 
@@ -46,33 +46,34 @@ $$
 
 设 K-HSTGAN 对帧 $t$ 的异常预测概率为 $p_t$，方差为 $\epsilon_t$（来自 4.2 节多头注意力的多头输出方差）。定义：
 
-$$
+\$$
 m_{\text{GNN}}\big(\{\text{anomaly}\}\big) = p_t
 \tag{5.12}
-$$
+\$$
 
-$$
+\$$
 m_{\text{GNN}}\big(\{\neg\text{anomaly}\}\big) = 1 - p_t - \epsilon_t
 \tag{5.13}
-$$
+\$$
 
-$$
+\$$
 m_{\text{GNN}}(\Theta) = \epsilon_t
 \tag{5.14}
-$$
+\$$
 
 $\epsilon_t$ 的计算：对 K-HSTGAN 的 $H = 4$ 个注意力头在帧 $t$ 的预测取方差：
 
-$$
+\$$
 \epsilon_t = \frac{1}{H} \sum_{h=1}^{H} (p_t^{(h)} - \bar{p}_t)^2
 \tag{5.15}
-$$
+\$$
 
 $\epsilon_t$ 越大，$m_{\text{GNN}}(\Theta)$ 越大——即 GNN 对自己越不确定，分配给"未知"的质量越多。
 
 ### 5.4.2.3 两种质量函数的对比
 
 **表 5-2** 规则与 GNN 质量函数的差异
+[三线表]
 
 | 属性 | $m_{\text{rule}}$ | $m_{\text{GNN}}$ |
 |------|-----------------|-----------------|
@@ -86,47 +87,47 @@ $\epsilon_t$ 越大，$m_{\text{GNN}}(\Theta)$ 越大——即 GNN 对自己越�
 
 对于两质量函数 $m_{\text{rule}}$ 与 $m_{\text{GNN}}$，Dempster 组合规则：
 
-$$
+\$$
 m_{\text{fused}}(A) = \frac{1}{1-K} \sum_{B \cap C = A} m_{\text{rule}}(B) \cdot m_{\text{GNN}}(C)
 \tag{5.16}
-$$
+\$$
 
 其中冲突系数：
 
-$$
+\$$
 K = \sum_{B \cap C = \emptyset} m_{\text{rule}}(B) \cdot m_{\text{GNN}}(C)
 \tag{5.17}
-$$
+\$$
 
 对于本框架的二分类简化情形，$K$ 的计算可展开为：
 
-$$
+\$$
 K = m_{\text{rule}}(\{a\}) \cdot m_{\text{GNN}}(\{\neg a\}) + m_{\text{rule}}(\{\neg a\}) \cdot m_{\text{GNN}}(\{a\})
 \tag{5.18}
-$$
+\$$
 
 融合质量函数的展开式：
 
-$$
+\$$
 m_{\text{fused}}(\{a\}) = \frac{m_{\text{rule}}(\{a\}) \cdot m_{\text{GNN}}(\{a\}) + m_{\text{rule}}(\{a\}) \cdot m_{\text{GNN}}(\Theta) + m_{\text{GNN}}(\{a\}) \cdot m_{\text{rule}}(\Theta)}{1 - K}
 \tag{5.19}
-$$
+\$$
 
-$$
+\$$
 m_{\text{fused}}(\{\neg a\}) = \frac{m_{\text{rule}}(\{\neg a\}) \cdot m_{\text{GNN}}(\{\neg a\}) + m_{\text{rule}}(\{\neg a\}) \cdot m_{\text{GNN}}(\Theta) + m_{\text{GNN}}(\{\neg a\}) \cdot m_{\text{rule}}(\Theta)}{1 - K}
 \tag{5.20}
-$$
+\$$
 
 **最终判别**：
 
-$$
+\$$
 \hat{y}^{\text{fused}} = \begin{cases}
 1\ (\text{anomaly}) & \text{if } m_{\text{fused}}(\{a\}) > 0.5 \\
 0\ (\text{normal})  & \text{if } m_{\text{fused}}(\{\neg a\}) > 0.5 \\
 \text{uncertain}     & \text{otherwise (触发冲突消解)}
 \end{cases}
 \tag{5.21}
-$$
+\$$
 
 ## 5.4.4 冲突系数 $K$ 作为决策触发条件
 
@@ -134,10 +135,10 @@ KS-NBCF 的策略是：当 $K \leq \tau_K$（默认 0.3），两证据基本一�
 
 此处的阈值 $\tau_K$ 可通过一个独立验证集搜索确定（在第 6 章实验中 $\tau_K$ 的敏感性分析中量化）：
 
-$$
+\$$
 \tau_K^* = \arg\max_{\tau \in [0,1]} \text{F1}(y_{\text{fused}}(\tau), y_{\text{truth}})
 \tag{5.22}
-$$
+\$$
 
 ## 5.4.5 冲突消解——KG 证据链路径回溯仲裁
 
@@ -147,28 +148,28 @@ $$
 
 对每帧冲突帧 $t$ 中所有 `SafetyViolation` 节点 $V = \{sv_1, \dots, sv_k\}$，执行 `MATCH (sv)-[:supportedByEvidence]->(e) RETURN e` 获取证据链（复用 `stk/storage/queries.py` 的 `anomaly_trace_query`）：
 
-$$
+\$$
 \mathcal{P}_v = \{\, e_1, e_2, \dots, e_{L_i} \mid e_j \text{ is evidence node for } sv_i \,\}
 \tag{5.23}
-$$
+\$$
 
 ### 5.4.5.2 GNN 注意力子图提取
 
 对当前帧 $t$ 的 RGAT 层注意力权重 $\alpha_{ij}^{(k)}$，抽取 top-10 注意力边构成 GNN 关键子图 $\mathcal{S}_a$（同 5.3.4.2 节）：
 
-$$
+\$$
 \mathcal{S}_a(t) = \{\, (i,j,k) \mid \text{top-10 } \alpha_{ij}^{(k)}(t) \,\}
 \tag{5.24}
-$$
+\$$
 
 ### 5.4.5.3 覆盖度计算
 
 证据链节点集合与 GNN 注意力子图节点的交集率：
 
-$$
+\$$
 \text{overlap} = \frac{|\mathcal{P}_v.\text{nodes} \cap \mathcal{S}_a.\text{nodes}|}{|\mathcal{P}_v.\text{nodes} \cup \mathcal{S}_a.\text{nodes}| + \epsilon}
 \tag{5.25}
-$$
+\$$
 
 式中 $\epsilon$ 防止除零。
 

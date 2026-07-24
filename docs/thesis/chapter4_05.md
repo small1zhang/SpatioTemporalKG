@@ -14,10 +14,10 @@ K-HSTGAN 的最终输出是异常二分类预测 $\hat{y}^{\text{anomaly}}_t \in
 
 **① 场景层头（聚合到节点集合）**：
 
-$$
+\$$
 \mathbf{h}^{\text{scene}}_t\ =\ \mathrm{MeanPool}\!\left(\ \mathbf{h}^{\text{temporal}}_v\ \middle|\ v \in \text{Vehicle} \cup \text{Pedestrian}\ \right)\ \in\ \mathbb{R}^{F'}
 \tag{4.32}
-$$
+\$$
 
 将所有车辆与行人的时序特征做平均池化，得到一个"场景级摘要向量"。
 
@@ -25,10 +25,10 @@ $$
 
 设当前窗口内 $B$ 个 InteractionEvent，每个事件 $b$ 由其 actor 集合 $\mathcal{A}_b$ 与 frame 窗口 $\mathcal{W}_b$ 限定。对每个 $b$：
 
-$$
+\$$
 \mathbf{h}^{\text{behavior}}_b\ =\ \mathrm{MeanPool}\!\left(\ \mathbf{h}^{\text{temporal}}_v\ \middle|\ v \in \mathcal{A}_b\ \right)\ \in\ \mathbb{R}^{F'}
 \tag{4.33}
-$$
+\$$
 
 得到 $B$ 个行为层摘要向量。这些向量构成行为层任务的 $B$ 个独立预测单元。当 $B = 0$（当前窗口无行为事件）时，行为层任务让位于默认 dummy 标签。
 
@@ -36,10 +36,10 @@ $$
 
 设当前窗口内 $K_t$ 个 SafetyViolation 节点（来自 3.5 节规则层）。每个 $sv_k$ 关联一对违规主体 $(s_k, d_k)$，则：
 
-$$
+\$$
 \mathbf{h}^{\text{rule}}_k\ =\ \big[\ \mathbf{h}^{\text{temporal}}_{s_k}\ \|\ \mathbf{h}^{\text{temporal}}_{d_k}\ \big]\ \in\ \mathbb{R}^{2F'}
 \tag{4.34}
-$$
+\$$
 
 将违规的源与目标节点的时序特征拼接，得到 $K_t$ 个规则层预测单元。
 
@@ -47,25 +47,25 @@ $$
 
 三个聚合头各自经过一个 2 层 MLP，得到对应任务的预测：
 
-$$
+\$$
 \hat{y}^{\text{anomaly}}_t\ =\ \sigma\!\left(\ \mathrm{MLP}_{\text{anomaly}}\!\left(\ \mathbf{h}^{\text{scene}}_t\ \right)\ \right)\ \in\ [0,1]
 \tag{4.35}
-$$
+\$$
 
-$$
+\$$
 \hat{\mathbf{y}}^{\text{scene}}_t\ =\ \mathrm{softmax}\!\left(\ \mathrm{MLP}_{\text{scene}}\!\left(\ \mathbf{h}^{\text{scene}}_t\ \right)\ \right)\ \in\ \mathbb{R}^3
 \tag{4.36}
-$$
+\$$
 
-$$
+\$$
 \hat{\mathbf{y}}^{\text{behavior}}_t\ =\ \mathrm{softmax}\!\left(\ \mathrm{MLP}_{\text{behavior}}\!\left(\ \mathbf{h}^{\text{behavior}}_b\ \right)\ \right)\ \in\ \mathbb{R}^7
 \tag{4.37}
-$$
+\$$
 
-$$
+\$$
 \hat{\mathbf{y}}^{\text{rule}}_t\ =\ \mathrm{sigmoid}\!\left(\ \mathrm{MLP}_{\text{rule}}\!\left(\ \mathbf{h}^{\text{rule}}_k\ \right)\ \right)\ \in\ \mathbb{R}^{14}
 \tag{4.38}
-$$
+\$$
 
 每个 MLP 默认结构为 $F' \to 64 \to \text{out\_dim}$，中间 ReLU 激活，末端未激活（softmax 或 sigmoid 在外层应用）。
 
@@ -75,10 +75,10 @@ $$
 
 主任务 $\hat{y}^{\text{anomaly}}_t$ 与三个辅助任务的输出做加权融合：
 
-$$
+\$$
 \hat{y}^{\text{fused}}_t\ =\ w_0 \cdot \hat{y}^{\text{anomaly}}_t + w_1 \cdot \max_j \hat{y}^{\text{scene}}_{t,j} + w_2 \cdot \max_b \max_j \hat{y}^{\text{behavior}}_{b,j} + w_3 \cdot \max_k \hat{y}^{\text{rule}}_{k,\cdot}
 \tag{4.39}
-$$
+\$$
 
 权重 $w_0$–$w_3$ 默认值为 $1.0, 0.1, 0.2, 0.3$，可在 `config/training.yaml` 中调整。融合最终输出 $\hat{y}^{\text{fused}}_t$ 取代单任务 $\hat{y}^{\text{anomaly}}_t$ 作为推理阶段最终异常分数。
 
@@ -88,10 +88,10 @@ $$
 
 设 $\mathcal{L}_0$ 为主损失（异常二分类 BCE），$\mathcal{L}_1, \mathcal{L}_2, \mathcal{L}_3$ 为三个辅助任务的损失（场景层、行为层、规则层）。总损失：
 
-$$
+\$$
 \mathcal{L}_{\text{total}}\ =\ \mathcal{L}_0\ +\ \lambda_1\, \mathcal{L}_1\ +\ \lambda_2\, \mathcal{L}_2\ +\ \lambda_3\, \mathcal{L}_3\ +\ \lambda_{\text{reg}}\, \mathcal{L}_{\text{reg}}
 \tag{4.40}
-$$
+\$$
 
 权重 $\lambda_1, \lambda_2, \lambda_3$ 默认为 $0.5, 0.5, 0.5$，$\lambda_{\text{reg}}$ 默认 $10^{-4}$。
 
@@ -99,17 +99,17 @@ $$
 
 异常/正常帧比例极度不均衡（100:1），主损失采用 Focal Loss [Lin et al., 2017]：
 
-$$
+\$$
 \mathcal{L}_0\ =\ -\ \frac{1}{T \cdot N} \sum_{t, v} \alpha_t\,(1 - \hat{p}_{t,v})^{\gamma_{\text{focal}}} \cdot \big[\ y_{t,v} \log \hat{p}_{t,v} + (1 - y_{t,v}) \log (1 - \hat{p}_{t,v})\ \big]
 \tag{4.41}
-$$
+\$$
 
 其中 $\gamma_{\text{focal}} = 2$ 是 Focal Loss 调节参数，$\alpha_t$ 为类别权重，由窗口内异常帧比例自适应计算：
 
-$$
+\$$
 \alpha_t\ =\ \min\!\left(\ 1,\ \frac{\#\text{normal}}{\#\text{anomaly} + \epsilon}\ \right)
 \tag{4.42}
-$$
+\$$
 
 默认 $\epsilon = 1$ 防止除零。$\alpha_t$ 上限设为 100 避免极端值导致训练不稳定。
 
@@ -117,20 +117,20 @@ $$
 
 辅助任务采用标准交叉熵：
 
-$$
+\$$
 \mathcal{L}_1\ =\ -\ \frac{1}{T} \sum_t \sum_{j=1}^{3} y^{\text{scene}}_{t,j} \log \hat{y}^{\text{scene}}_{t,j}
 \tag{4.43}
-$$
+\$$
 
-$$
+\$$
 \mathcal{L}_2\ =\ -\ \frac{1}{B} \sum_b \sum_{j=1}^{7} y^{\text{behavior}}_{b,j} \log \hat{y}^{\text{behavior}}_{b,j}
 \tag{4.44}
-$$
+\$$
 
-$$
+\$$
 \mathcal{L}_3\ =\ -\ \frac{1}{K_t} \sum_k \sum_{j=1}^{14} \big[\ y^{\text{rule}}_{k,j} \log \hat{y}^{\text{rule}}_{k,j} + (1 - y^{\text{rule}}_{k,j}) \log (1 - \hat{y}^{\text{rule}}_{k,j})\ \big]
 \tag{4.45}
-$$
+\$$
 
 注意 $\mathcal{L}_3$ 是 BCE（多标签），而非交叉熵。
 
@@ -138,10 +138,10 @@ $$
 
 策略 III（4.4 节）的弱监督标签 $y^{\text{weak}}$ 通过 $\mathcal{L}_3^{\text{weak}}$ 注入到 $\mathcal{L}_3$：
 
-$$
+\$$
 \mathcal{L}_3\ =\ \mathcal{L}_3^{\text{gt}}\ +\ \gamma_3(\text{epoch})\, \mathcal{L}_3^{\text{weak}}
 \tag{4.46}
-$$
+\$$
 
 其中 $\gamma_3(\text{epoch})$ 按 (4.31) 线性递减。当 epoch $\geq T_{\text{warm}} = 10$ 时，$\gamma_3 = 0$，弱监督完全淡出，最终训练仅依赖真实标签。
 
@@ -149,10 +149,10 @@ $$
 
 正则化项包含 L2 正则与图注意力稀疏正则：
 
-$$
+\$$
 \mathcal{L}_{\text{reg}}\ =\ \sum_{\theta \in \Theta} \|\theta\|_2^2\ +\ \beta\, \sum_{k} \sum_{i,j} |\alpha_{ij}^{(k)}|^2
 \tag{4.47}
-$$
+\$$
 
 第二项鼓励注意力分布稀疏化，避免所有节点获得相近的注意力权重，影响可解释性。$\beta$ 默认 $0.01$。
 
@@ -186,17 +186,17 @@ K-HSTGAN 训练分三阶段进行，以平衡主任务的细调与辅助任务�
 
 训练过程中 LSTM 易出现梯度爆炸，对所有参数施加梯度裁剪：
 
-$$
+\$$
 \mathbf{g}\ \leftarrow\ \min\!\left(\ 1,\ \frac{\|\mathbf{g}\|_2}{c}\ \right)\ \cdot\ \mathbf{g},\quad c = 5.0
 \tag{4.48}
-$$
+\$$
 
 同时使用 EMA（Exponential Moving Average）做参数平均，缓解训练后期梯度震荡：
 
-$$
+\$$
 \theta_{\text{EMA}}^{(t)}\ =\ 0.99\, \theta_{\text{EMA}}^{(t-1)} + 0.01\, \theta^{(t)}
 \tag{4.49}
-$$
+\$$
 
 测试期使用 $\theta_{\text{EMA}}$ 替代 $\theta$ 做推理。
 

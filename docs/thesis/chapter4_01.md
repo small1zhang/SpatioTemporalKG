@@ -16,19 +16,19 @@
 
 给定 $\mathcal{STKG}$ 演进序列 $\{G_1, G_2, \dots, G_T\}$ 与对应的差分序列 $\{\Delta g_1, \Delta g_2, \dots, \Delta g_T\}$、规则知识 $\mathcal{K} = \{\text{RSS params}, \text{rule defs}\}$，定义异常检测任务为：
 
-$$
+\$$
 \hat{y}_t\ =\ f_{\theta}\Big(\ G_1, \dots, G_t,\ \Delta g_1, \dots, \Delta g_t,\ \mathcal{K}\ \Big),\quad t \in [1, T]
 \tag{4.1}
-$$
+\$$
 
 其中 $\hat{y}_t \in [0,1]$ 为帧 $t$ 的异常预测概率。实际应用中 $T$ 通常取 30（即 1.5 秒滚动窗口 @ 20 fps），覆盖典型的跟车超车行为时间尺度。
 
 多任务输出扩展为：
 
-$$
+\$$
 \hat{y}_t\ =\ \big(\ \hat{y}_t^{\text{anomaly}},\ \hat{\mathbf{y}}_t^{\text{scene}},\ \hat{\mathbf{y}}_t^{\text{behavior}},\ \hat{\mathbf{y}}_t^{\text{rule}}\ \big)
 \tag{4.2}
-$$
+\$$
 
 分别对应主异常二分类、场景层异常 3 类、行为层异常 7 类、规则层触发 24 类（含 14 条交规 + 3 项 RSS + 7 类常识违规）。
 

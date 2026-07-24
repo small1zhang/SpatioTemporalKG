@@ -26,28 +26,28 @@ K-HSTGAN 的主任务（异常二分类）需要充足的正例样本驱动训�
 
 弱监督标签按帧汇总规则触发情况：
 
-$$
+\$$
 y^{\text{weak}}_t \in \mathbb{R}^{14},\quad y^{\text{weak}}_{t, i} = \max_v \text{severity}_i(v, t)
 \tag{5.1}
-$$
+\$$
 
 其中 $\text{severity}_i(v, t)$ 是帧 $t$ 中规则 $i$ 对车辆 $v$ 的触发严重度（来自 `stk/rules/traffic/rules.py`）。当窗口内有多个车辆触发同一条规则，取严重度最大值作为该帧的弱标签。
 
 注意：弱监督标签通过 4.5 节规则层辅助头 $\mathbf{y}^{\text{rule}}_t$ 与 (4.45) 定义的 BCE 损失 $\mathcal{L}_3^{\text{gt}}$ 进入模型训练：
 
-$$
+\$$
 \mathcal{L}_3^{\text{weak}} = -\frac{1}{T} \sum_t \sum_{i=1}^{14} \big[\ y^{\text{weak}}_{t,i} \log \hat{y}^{\text{rule}}_{t,i} + (1 - y^{\text{weak}}_{t,i}) \log (1 - \hat{y}^{\text{rule}}_{t,i})\ \big]
 \tag{5.2}
-$$
+\$$
 
 ### 5.3.2.3 温度递减控制
 
 弱监督仅在训练前 10 个 epoch 起作用，权重 $\gamma_3(\text{epoch})$ 线性递减：
 
-$$
+\$$
 \gamma_3(\text{epoch}) = \max\big(0,\ 0.5 \cdot (1 - \text{epoch}/10)\big)
 \tag{5.3}
-$$
+\$$
 
 epoch 10 后 $\gamma_3 = 0$，弱监督完全淡出。这是为了保证 GNN 不**永久依赖规则信号**——训练完成后规则可"拆除"，GNN 应能独立检测该 14 类规则覆盖的异常。
 
@@ -80,24 +80,24 @@ epoch 10 后 $\gamma_3 = 0$，弱监督完全淡出。这是为了保证 GNN 不
 
 则规则 $i$ 的置信度更新：
 
-$$
+\$$
 \eta_i^{(\text{epoch}+1)} \leftarrow \eta_i^{(\text{epoch})} \cdot \big[\ 1 - \beta\, (s_i^- + \varepsilon_i) \cdot (1 - \eta_i)^{+}\ \big]
 \tag{5.4}
-$$
+\$$
 
 其中 $\beta$ 是学习步长（默认 0.001），$\varepsilon_i$ 是规则的"可信度惩罚"项：
 
-$$
+\$$
 \varepsilon_i = \frac{0.2}{\sqrt{\ell_i}} + 0.05\, s_i^0
 \tag{5.5}
-$$
+\$$
 
 当 $\eta_i$ 低于阈值（默认 0.3）时触发**规则参数调整**：
 
-$$
+\$$
 \theta_i \leftarrow \theta_i - \nabla_{\theta_i} \mathcal{L}\!\left(\ \text{rule}_i(\theta_i) \,\text{vs.}\, \text{gt\_anomaly}\ \right)
 \tag{5.6}
-$$
+\$$
 
 $\theta_i$ 是规则 $i$ 的阈值参数（如 R10 的限速 120 km/h）。梯度下降需要规则可微，对一些阈值固定的规则（R1 行人优先距离 15 m）采用区间搜索：尝试 $\theta_i \in \{\theta_i - \Delta, \theta_i, \theta_i + \Delta\}$ 三种参数值，取该规则触发后与真值交集最大的阈值。
 
@@ -141,10 +141,10 @@ $\theta_i$ 是规则 $i$ 的阈值参数（如 R10 的限速 120 km/h）。梯�
 
 对推理时 K-HSTGAN 给出 $y^{\text{anomaly}}_t > 0.5$ 的帧（GNN 触发异常），抽取 RGAT 的注意力权重 $\alpha_{ij}^{(k)}$ 排序前 $K_{\text{top}} = 10$ 个 $(i, j, k)$ 三元组，构成"异常注意力子图 $\mathcal{S}_a$":
 
-$$
+\$$
 \mathcal{S}_a(t) = \big\{\ (i, j, k)\ \big|\ \text{top-}K_{\text{top}} \alpha_{ij}^{(k)}(t)\ \big\}
 \tag{5.7}
-$$
+\$$
 
 ### 5.3.4.3 规则模板匹配
 

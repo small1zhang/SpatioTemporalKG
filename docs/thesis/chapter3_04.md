@@ -36,14 +36,15 @@ RSS（Responsibility-Sensitive Safety）由 Shalev-Shwartz 等[Shalev-Shwartz, 2
 
 给定前车 $B$ 与跟驰后车 $A$，两车同车道且 $\text{ahead\_of}(B, A)$ 成立，则后车 $A$ 必须与 $B$ 保持的纵向最小安全距离 $d_{\min}^{\text{long}}(A, B, t)$ 定义为：
 
-$$
+\$$
 d_{\min}^{\text{long}}(A, B, t) = \max\!\left(0,\ v_A \rho + \frac12 a_{\max,\text{accel}} \rho^2 + \frac{(v_A + a_{\max,\text{accel}}\rho)^2}{2\,a_{\min,\text{brake}}} - \frac{v_B^2}{2\,a_{\text{brake}}}\right)
 \tag{3.6}
-$$
+\$$
 
 其中各参数的含义与取值如表 3-8 所示。
 
 **表 3-8** RSS 子层参数表（`DEFAULT_RSS_PARAMS`）
+[三线表]
 
 | 参数 | 符号 | 值 | 单位 | 描述 |
 |------|------|-----|------|------|
@@ -54,10 +55,10 @@ $$
 
 纵向危险状态判定：
 
-$$
+\$$
 \text{SafeDistanceViolation}(A, B, t) \iff d_{\text{long}}(A, B, t) < d_{\min}^{\text{long}}(A, B, t)
 \tag{3.7}
-$$
+\$$
 
 式中 $d_{\text{long}}(A, B, t)$ 为后车 $A$ 前端到前车 $B$ 后端的实测纵向距离，由 `check_safe_distance_longitudinal(d_actual, v_A, v_B, params)` 实现。
 
@@ -65,42 +66,42 @@ $$
 
 当两车横向间距过近时可能产生刮擦或碰撞。横向最小安全距离定义为：
 
-$$
+\$$
 d_{\min}^{\text{lat}}(A, B, t) = \mu + \frac{v_{\text{lat},A}^2}{2\,a_{\min,\text{lat,brake}}} + \rho\,v_{\text{lat},A} - \frac{v_{\text{lat},B}^2}{2\,a_{\min,\text{lat,brake},B}}
 \tag{3.8}
-$$
+\$$
 
 其中 $\mu = 0.5$ m 为横向安全裕度，$a_{\min,\text{lat,brake}} = 1.5$ m/s² 为最小横向制动减速度，$v_{\text{lat}}$ 为横向速度。
 
 横向危险状态判定：
 
-$$
+\$$
 \text{LateralDangerousState}(A, B, t) \iff d_{\text{lat}}(A, B, t) < d_{\min}^{\text{lat}}(A, B, t)
 \tag{3.9}
-$$
+\$$
 
 ### 3.5.2.3 复合状态与责任归因
 
 RSS 将车道并线、横穿等交互场景视为纵向与横向危险状态的组合：
 
-$$
+\$$
 \text{DangerousState}(A, B, t) = \text{SafeDistanceViolation}(A, B, t) \lor \text{LateralDangerousState}(A, B, t)
 \tag{3.10}
-$$
+\$$
 
 RSS 还定义"反应不当"判定：若 $\text{DangerousState}(A, B, t)$ 在连续 3 帧内，$A$ 的制动踏板 $< 0.3$（即 $A$ 未采取充分制动），则触发：
 
-$$
+\$$
 \text{NoProperResponse}(A, t) = \bigwedge_{k=0}^{2} \text{brake}(A, t+k) < 0.3
 \tag{3.11}
-$$
+\$$
 
 责任归因逻辑：
 
-$$
+\$$
 \text{ResponsibleAgent}(A, \text{event}) \iff \text{NoProperResponse}(A) \land B \text{ 行为合规}
 \tag{3.12}
-$$
+\$$
 
 此处"行为合规"定义为 $B$ 在相关帧未触发任何交规违规。
 
@@ -111,6 +112,7 @@ $$
 交通法规子层覆盖中国《道路交通安全法》中 14 条与自动驾驶直接相关的规则（R1-R18，含 R6/R12/R14 未实现）。每条规则都由一个独立的 `check_Ri_*` 函数实现，输入为场景层实体与行为层输出，输出为 `(is_violation, severity, evidence)` 三元组。表 3-9 汇总全部 14 条规则。
 
 **表 3-9** 交通法规规则清单
+[三线表]
 
 | 规则 | 函数名 | 谓词名 | 判定条件摘要 |
 |------|--------|--------|-------------|
@@ -216,6 +218,7 @@ RSS 参数与交规阈值可通过 YAML 配置文件动态调整，无需修改�
 规则层涉及 4 类节点与 7 种关系，表 3-10 与 3-11 列出了全部。
 
 **表 3-10** 规则层节点类型
+[三线表]
 
 | 节点 | Neo4j Label | 属性 | 作用 |
 |------|-------------|------|------|
@@ -225,6 +228,7 @@ RSS 参数与交规阈值可通过 YAML 配置文件动态调整，无需修改�
 | `ResponsibilityAssignment` | `Responsibility` | resp_id, sv_id, responsible_actor_id, reason | 责任归属 |
 
 **表 3-11** 规则层关系类型
+[三线表]
 
 | 关系 | RuleRelationType | 源→目标 | 说明 |
 |------|-----------------|---------|------|

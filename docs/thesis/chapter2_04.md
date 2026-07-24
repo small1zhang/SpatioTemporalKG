@@ -28,10 +28,10 @@ Shalev-Shwartz 等人在 2017 年提出 RSS（Responsibility-Sensitive Safety）
 
 **纵向安全距离**：同车道后车 $A$ 与前车 $B$，纵向距离 $d_{\text{long}}$ 应满足：
 
-$$
+\$$
 d_{\text{long}}^{\min} = \max\left( 0,\ \frac{v_A^2}{2 a_{\min,\text{brake},A}} - \frac{v_B^2}{2 a_{\max,\text{brake},B}} + v_A \rho \right)
 \tag{2.26}
-$$
+\$$
 
 其中各参数含义如表 2-5 所示。
 
@@ -47,10 +47,10 @@ $$
 
 **横向安全距离**：相邻车道车 $A$ 与 $B$，横向距离 $d_{\text{lat}}$ 应满足：
 
-$$
+\$$
 d_{\text{lat}}^{\min} = \mu + \max\left( 0,\ \frac{w_A (v_{A,\perp} + v_{AB,\perp})}{2 a_{\min,\text{lat},A}} + \frac{w_B v_{AB,\perp}}{2 a_{\min,\text{lat},B}} \right)
 \tag{2.27}
-$$
+\$$
 
 其中 $w_A, w_B$ 为车宽，$\mu$ 为横向最小安全余量，$a_{\min,\text{lat}}$ 为横向最小合理刹车加速度（默认 1 m/s²），$v_{\perp}$ 为横向速度。
 
@@ -58,10 +58,10 @@ $$
 
 **纵向安全距离残差**：
 
-$$
+\$$
 \Delta d_{\text{long}} = d_{\text{long}} - d_{\text{long}}^{\min}
 \tag{2.28}
-$$
+\$$
 
 $\Delta d_{\text{long}} > 0$ 表示安全；$< 0$ 表示违规，触发违规事件 $\text{SafetyViolation}$（详见 §3.5 RSS 子层）。
 

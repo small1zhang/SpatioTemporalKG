@@ -16,7 +16,7 @@
 
 对每个车辆节点 $v$，计算 5 维 RSS 残差向量 $\boldsymbol{\kappa}_{\text{rss}}(v)$：
 
-$$
+\$$
 \boldsymbol{\kappa}_{\text{rss}}(v) = \Big[
 \Delta d_{\min}^{\text{long}} - d_{\text{long}},\
 \Delta d_{\min}^{\text{lat}} - d_{\text{lat}},\
@@ -25,7 +25,7 @@ v - v_{\text{limit}},\
 \text{brake} - \text{brake}_{\min}
 \Big]
 \tag{4.24}
-$$
+\$$
 
 各分量的含义与计算方式：
 
@@ -39,10 +39,10 @@ $$
 
 残差向量 $\boldsymbol{\kappa}_{\text{rss}}(v)$ 经 $\text{LayerNorm}$ 归一化后与原始特征拼接：
 
-$$
+\$$
 \mathbf{x}_v^{\text{aug}}\ =\ \big[\ \mathbf{x}_v\ \|\ \text{LayerNorm}(\boldsymbol{\kappa}_{\text{rss}}(v))\ \big]
 \tag{4.25}
-$$
+\$$
 
 拼接后的特征维数 $F^{\text{aug}} = F + 5 = 18 + 5 = 23$（原 18 维车辆特征 + 5 维残差）。RGAT 的输入层接受 $F^{\text{aug}}$ 维输入，使 GAT 在注意力计算时天然获得 RSS 先验信息。
 
@@ -54,26 +54,26 @@ $$
 
 对每个车辆节点 $v$，交规触发强度向量：
 
-$$
+\$$
 \boldsymbol{\kappa}_{\text{rule}}(v)\ =\ \big[\ \text{severity}_{R1}(v),\ \text{severity}_{R2}(v),\ \dots,\ \text{severity}_{R18}(v)\ \big]\ \in\ \mathbb{R}^{14}
 \tag{4.26}
-$$
+\$$
 
 其中 $\text{severity}_i(v) \in [0,1]$，0 表示规则 $i$ 未触发，>0 表示触发且严重度。该向量的特点是稀疏——正常帧中最多 1-2 项非零。
 
 将此向量通过一个小型两层 MLP 映射至 $F' = 64$ 维：
 
-$$
+\$$
 \mathbf{z}_v^{\text{rule}}\ =\ \mathrm{MLP}_{\text{rule}}\big(\ \boldsymbol{\kappa}_{\text{rule}}(v)\ \big)\ \in\ \mathbb{R}^{F'}
 \tag{4.27}
-$$
+\$$
 
 MLP 结构为 $14 \to 32 \to 64$，ReLU 激活。该向量不参与初始特征拼接，而是作为额外信号接入 RGAT 层输出后的残差路径：
 
-$$
+\$$
 \mathbf{h}_v^{\text{spatial'}}\ =\ \mathbf{h}_v^{\text{spatial}} + \mathbf{z}_v^{\text{rule}}
 \tag{4.28}
-$$
+\$$
 
 残差路径的好处：当交规触发强度极低（$\boldsymbol{\kappa}_{\text{rule}}(v) \approx \mathbf{0}$），MLP 输出约为 $0$，不干扰正常的空间编码；当交规触发显著（如闯红灯有高 severity），$\mathbf{z}_v^{\text{rule}}$ 非零，给空间嵌入加一个"规则信号偏置"。
 
@@ -83,29 +83,29 @@ $$
 
 定义弱监督标签：
 
-$$
+\$$
 y_t^{\text{weak}}\ =\ \begin{cases}
 1 & \text{if } \max_{v} \text{severity}(v, t) > \tau_{\text{weak}}\ (\text{default }0.3) \\
 0 & \text{otherwise}
 \end{cases}
 \tag{4.29}
-$$
+\$$
 
 该标签仅用于多任务训练的**规则层辅助头**的损失计算：
 
-$$
+\$$
 \mathcal{L}_{\text{rule}}^{\text{weak}}\ =\ \mathrm{BCE}\big(\ \hat{\mathbf{y}}_t^{\text{rule}},\ y_t^{\text{weak}} \big)
 \tag{4.30}
-$$
+\$$
 
 弱监督标签并非最终 GT 替代——它仅指导规则层辅助头（对应 4.5 节的 $p_{\text{rule}}$ 输出）的初始训练方向。训练后期（约 epoch 10 后），弱监督损失的权重 $\gamma_3$ 线性递减至 0，让模型自主发现规则引擎可能遗漏的异常模式。
 
 弱监督训练的"温度控制"通过动态权重实现：
 
-$$
+\$$
 \gamma_3(\text{epoch})\ =\ \max\!\big(0,\ \gamma_3^{\text{init}} \cdot (1 - \text{epoch} / T_{\text{warm}})\big)
 \tag{4.31}
-$$
+\$$
 
 默认 $\gamma_3^{\text{init}} = 0.5$，$T_{\text{warm}} = 10$ epochs。这一递减策略保证了模型不会永久性依赖规则信号，符合"规则是脚手架，训练完成后可拆除"的设计哲学。
 
@@ -114,6 +114,7 @@ $$
 表 4-3 对比三种策略在五个维度的表现。
 
 **表 4-3** 三种知识注入策略对比
+[三线表]
 
 | 维度 | 策略 I（RSS 残差） | 策略 II（交规 Embedding） | 策略 III（弱监督） |
 |------|-------------------|------------------------|------------------|
