@@ -94,6 +94,10 @@ def process_chunks(
     checkpoint_path: Optional[Path] = None,
     shard_frames: Optional[int] = None,
     coalesce_containment: bool = True,
+    ego_id: Optional[str] = None,
+    importance_threshold: float = -1.0,
+    exclude_lanes: bool = False,
+    prune_edges: bool = False,
 ):
     """跨分块执行 Phase2→3→4→5.
 
@@ -139,14 +143,14 @@ def process_chunks(
     _importance_cfg = None
     _background_cfg = None
     _edge_pruner_cfg = None
-    _filter_ego_id = args.ego_id
-    if args.importance_threshold >= 0.0:
+    _filter_ego_id = ego_id
+    if importance_threshold >= 0.0:
         _ego_cfg = EgoCentricConfig.default()
-        _ego_cfg.importance_threshold = args.importance_threshold
+        _ego_cfg.importance_threshold = importance_threshold
         _importance_cfg = ImportanceScorer(_ego_cfg)
-    if args.exclude_lanes:
+    if exclude_lanes:
         _background_cfg = BackgroundFilter(EgoCentricConfig.default())
-    if args.prune_edges:
+    if prune_edges:
         _ego_cfg = EgoCentricConfig.default()
         if _importance_cfg is None:
             _ego_cfg.importance_threshold = 0.30
@@ -683,6 +687,10 @@ def main():
         checkpoint_path=checkpoint_path,
         shard_frames=args.shard_frames,
         coalesce_containment=not args.no_coalesce,
+        ego_id=args.ego_id,
+        importance_threshold=args.importance_threshold,
+        exclude_lanes=args.exclude_lanes,
+        prune_edges=args.prune_edges,
     )
 
     print("\n[OK] Pipeline done.")
