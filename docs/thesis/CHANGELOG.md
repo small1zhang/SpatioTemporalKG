@@ -34,6 +34,19 @@
 | `chapter4_06.md:9` 对比表头 | `xERTE<br>[Han, ICLR 2021]` | `xERTE<br>[Han, arXiv 2020]` | xERTE 仅有 arXiv:2012.15537 预印本，未正式会议发表 |
 | `chapter5_index.md:68` | `Han et al., xERTE, ICLR 2021` | `Han et al., xERTE, arXiv 2020` | 同上 |
 
+### 修复：第 3 章公式编号回退 + 索引表校正
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `chapter3_02.md` | 公式编号 -1 | 旧 3.8-3.11 → 新 3.7-3.10（A3/A5/A6/A7 四公理） |
+| `chapter3_03.md` | 公式编号 -1 | 旧 3.12-3.28 → 新 3.11-3.27（RSS 四式 + 6 交规 + severity + GNN 三式） |
+| `chapter3_04.md` | 公式编号 -1 | 旧 3.29-3.35 → 新 3.28-3.34（Δg_t 四元组 + AttrVersion + SummaryEvent） |
+| `chapter3_05.md` | 公式编号 -1 | 旧 3.36 → 新 3.35（泊松间隔分布） |
+| `chapter3_07.md` | 索引表更新 | 公式范围、公式描述、脚注编号全面校正为 3.1-3.35 |
+| `CHANGELOG_chapter3_refactor.md` | 补记二次修正 | 记录修复起因、策略、全文验收结果 |
+
+> 根因：3.1 节二次盲审修改中加入 STALE→INACTIVE 判定式后，batch sed 对 chapter3_02-05 做了 +1 偏移，但 chapter3_01 内部未同步，导致出现两个 `\tag{3.7}` 且缺 `\tag{3.6}`。修复方式为保持 chapter3_01 新编号（3.1-3.6），将 chapter3_02-05 统一回退 -1，恢复全章 3.1-3.35 连续无重复。
+
 ---
 
 ## 2026-07-23
