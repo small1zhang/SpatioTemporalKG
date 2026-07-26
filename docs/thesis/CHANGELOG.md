@@ -5,6 +5,44 @@
 
 ---
 
+## 2026-07-26
+
+### 实现：第 4 章 K-HSTGAN 模型骨架（commit 5733e78）
+
+新增 `stk/gnn/` 包，含 6 个文件（exporter / rgat / dhlstm_attn / knowledge_injector / k_hstgan / trainer），落地 §4.1–4.5 全部模块。K-HSTGAN smoke test 通过：F=18→23→64、H=4、T=1，K=14 关系通道。
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `stk/gnn/exporter.py` | 新增 | STKG snapshot → PyG Data 转换，含 kappa_rule 主类映射 |
+| `stk/gnn/rgat.py` | 新增 | RGAT 关系感知图注意力，per-relation channel + 门控融合 |
+| `stk/gnn/dhlstm_attn.py` | 新增 | 差分门控 LSTM + 行为注意力 + Scene Transformer |
+| `stk/gnn/knowledge_injector.py` | 新增 | RSS 强度残差 + 规则强度残差注入 |
+| `stk/gnn/k_hstgan.py` | 新增 | 完整模型 & 多任务融合头 |
+| `stk/gnn/trainer.py` | 新增 | 多任务训练器（Focal Loss + 三阶段调度 + EMA） |
+| `scripts/long_run/smoke_test_k_hstgan.py` | 新增 | 端到端 smoke test |
+
+### 实现：第 5 章 KS-NBCF 融合框架（commit e320dfd）
+
+新增 `stk/fusion/` 包，含 4 个模块，落地 §5.2–5.5 全部核心算法。K_HSTGAN 扩展 `return_extras=True` 接口暴露 per_head_anomaly / rgat_attention。KS-NBCF smoke test 通过：D-S K=0.516，resolve_type=trust_GNN，overlap=1.0。
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `stk/fusion/feat_injection.py` | 新增 | φ_feat 编排层（§5.2 算法 5.1） |
+| `stk/fusion/loop_feedback.py` | 新增 | φ_loop 三阶段闭环反馈（§5.3 算法 5.2+5.3） |
+| `stk/fusion/ds_fuser.py` | 新增 | D-S 证据理论融合（§5.4 式 5.9–5.21） |
+| `stk/fusion/evidence_chain.py` | 新增 | KG 证据链回溯仲裁（§5.4.5 算法 5.4） |
+| `scripts/long_run/smoke_test_ks_nbcf.py` | 新增 | 端到端 KS-NBCF smoke test |
+
+### 修复：key bug 修复（commit 05a0d8f）
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `stk/gnn/exporter.py` | 修复 | `_attr()` 函数穿透 `attrs` 子字典（pydantic 模型字段访问） |
+| `stk/gnn/exporter.py` | 修复 | `_build_edge_index` 增加空间 K-NN fallback（无 waypoints 时从车辆位置建图） |
+| `stk/gnn/rgat.py` | 修复 | einsum 维度错位 + 手工 scatter softmax + index_add_ 维度对齐 |
+
+---
+
 ## 2026-07-24
 
 ### 新增：第 1 章（绪论）完整重写

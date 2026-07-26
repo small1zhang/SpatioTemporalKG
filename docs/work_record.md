@@ -135,3 +135,174 @@ data/long_run/
 ├── Town05_20min/  (12 chunks, 2.3 GB)  ← 等待 kg
 └── Town10HD_20min/ (12 chunks, 2.0 GB) ← 等待 kg
 ```
+---
+
+## 8. 论文第 4/5 章 GNN 模型代码实现 (2026-07-26)
+
+### 8.1 背景
+
+论文第 3 章 STKG 图谱基础设施完成后，进入第 4 章（K-HSTGAN 异常检测模型）和第 5 章（KS-NBCF 融合框架）的代码实现阶段。目标：先搭建最小可运行骨架（skeleton-first），跑通全链路后再补全训练/实验。
+
+---
+
+### 8.2 第 4 章：K-HSTGAN 模型（commit 5733e78）
+
+**新建 `stk/gnn/` 包**，包含 6 个文件：
+
+| 文件 | 功能 | 论文章节 | 行数 |
+|------|------|---------|------|
+| `__init__.py` | 模块导出 | — | 15 |
+| `exporter.py` | STKG snapshot → PyG Data 转换 | §4.1 输入层 | 480+ |
+| `rgat.py` | 关系感知图注意力（per-relation channel + 门控融合） | §4.2 式 4.4–4.11 | 290+ |
+| `dhlstm_attn.py` | 差分门控 LSTM + 行为注意力 + Scene Transformer | §4.3 式 4.13–4.23 | 260+ |
+| `knowledge_injector.py` | RSS 残差注入 + 规则强度残差注入 | §4.4 式 4.24–4.28 | 100+ |
+| `k_hstgan.py` | 完整模型（串联所有模块 + 多任务融合头） | §4.1–4.5 | 210+ |
+| `trainer.py` | 多任务训练器（Focal Loss + 三阶段调度 + EMA） | §4.5 式 4.40–4.49 | 250+ |
+
+**关键设计决策：**
+- 输入维度 F=18（基础）→ 23（+5 RSS 残差）→ 64（隐藏层 F'）
+- 关系先验 γ_k 按 Table 4-2 初始化（ahead_of=ln(4), nearby_pedestrian=ln(4), contains*=0 排除）
+- 多头注意力 H=4，每头输出 head_dim=16，最终**平均**而非拼接（与论文一致）
+- **单帧模式**：输入 [N, 1, F']，T 维留作后续多帧窗口
+
+---
+
+### 8.3 第 5 章：KS-NBCF 融合框架（commit e320dfd）
+
+**新建 `stk/fusion/` 包**，包含 5 个文件：
+
+| 文件 | 功能 | 论文章节 | 行数 |
+|------|------|---------|------|
+| `__init__.py` | 包导出 | — | 23 |
+| `feat_injection.py` | φ_feat 编排层（调度 K-HSTGAN） | §5.2 算法 5.1 | 81 |
+| `loop_feedback.py` | φ_loop 三阶段闭环反馈 | §5.3 算法 5.2+5.3 | 364 |
+| `ds_fuser.py` | D-S 证据理论融合核心 | §5.4 式 5.9–5.21 | 195 |
+| `evidence_chain.py` | KG 证据链回溯仲裁 | §5.4.5 算法 5.4 | 290 |
+
+**三阶段闭环关键参数：**
+- Stage I 弱监督：γ₃(epoch) = max(0, 0.5·(1−epoch/10))
+- Stage II η 更新：β=0.001, η_floor=0.3, EMA 0.9/0.1
+- Stage III 动态规则：top-K 注意力映射到 6 种模板
+- τ_K = 0.3（§5.4.4 表 5-3，论文正文默认值）
+
+---
+
+### 8.4 K-HSTGAN 接口扩展（支持 KS-NBCF）
+
+为支持融合模块对多头方差 ε_t 和注意力权重的需求，扩展了两个接口：
+
+**`k_hstgan.py forward(data, return_extras=False)`：**
+- `return_extras=True` 时额外返回 dict，含：
+  - `per_head_anomaly` [N, H]：逐头异常概率（§5.4.2.2 用于 ε_t）
+  - `rgat_attention` Dict[int, [H, E_k]]：RGAT 注意力权重（§5.3.4 Stage III + 仲裁）
+  - `h_spatial` / `h_temporal` [N, F']：空间编码 / 时序编码
+  - `edge_index` / `edge_type` / `delta_feat`
+- 不传 `return_extras` 时行为完全向后兼容
+
+**`rgat.py forward(..., return_attention=False)`：**
+- 返回 `(h_out, attentions, per_head_per_node)` 或仅 `h_out`
+
+---
+
+### 8.5 关键 bug 修复（commit 05a0d8f）
+
+#### (a) `_attr()` attrs 子字典穿透
+
+**问题**：SafetyViolation pydantic 模型的 src_id/dst_id/severity 存于 `attrs` 子字典中，`model_dump().get("src_id")` 返回 None → exporter / loop_feedback / evidence_chain 无法读取违规信息。
+
+**修复**：三处 `_attr()` 函数统一先查顶层 key，再 fallback 到 `attrs` 子字典。
+
+#### (b) exporter 空间 K-NN fallback
+
+**问题**：scenario_library 不提供 waypoints，`build_lane_topology` 返回空列表 → 场景层 `scene_rels` 永远为空 → GNN 无法构建图（#e=0 对所有场景）。
+
+**修复**：在 `_build_edge_index` 中增加 fallback：当 `scene_rels` 为空时，从车辆/行人 location 构建 K-NN 图（K=5），边类型根据相对方向判定（ahead_of / in_lane / nearby_pedestrian / beside）。验证：S00 两车产生 2 条边，S33 四车产生 12 条边。
+
+#### (c) RGAT softmax / scatter 维度 bug
+
+**问题**：commit 5733e78 中，PyG `softmax` 调用传入2D `idx_dst` [H, E_k]，PyG softmax 要求1D index → 报错。此外 `scatter_add_` 中 source transpose 后维度不匹配。
+
+**修复**：
+1. 替换 PyG softmax 为手工 scatter softmax（数值稳定，减 max 后 exp + 分母累加）
+2. `node_h.index_add_(1, dst_k, weighted)` 直接传 [H, E_k, head_dim]，source.size(1)=E_k==len(dst_k) ✓
+
+---
+
+### 8.6 Smoke Test 结果
+
+#### K-HSTGAN（commit 5733e78 + 后续修复）
+```
+✅ PASSED 0.16s (CPU)
+场景 S00, max_frames=6
+模型参数: 132,607
+forward: y_a=(2,1) mean=0.478, y_s=(2,3), y_b=(2,7), y_r=(2,14)
+backward loss: 4.59, grad_norm: 3.70 (44 params)
+1 epoch trainer: L_total=2.03, stage=I, lr=1e-3
+```
+
+#### KS-NBCF（commit e320dfd + 后续修复）
+```
+✅ PASSED 0.01s (CPU)
+场景 S00, max_frames=4
+K=0.516, m_fused_anomaly=0.783
+evidence_strength=0.800, rule_fires=2
+resolve_type=trust_GNN (overlap=1.00)
+explanation: (veh_010)-[:in_lane α=1.00]->(veh_011)
+```
+
+#### 14 场景全量验证（随机权重）
+
+| 场景 | #v | #e | #vi | resolve | overlap | 说明 |
+|------|----|----|-----|---------|---------|------|
+| S00  | 2  | 2  | 1   | trust_GNN | 1.00 | in_lane + ahead_of, K>τ_K |
+| S01  | 1  | 0  | 0   | consistent | 0.00 | 单车无边 |
+| S02  | 2  | 2  | 0   | consistent | 0.00 | 无违规 |
+| S10  | 3  | 6  | 0   | consistent | 0.00 | 3车6边，无违规 |
+| S11  | 2  | 2  | 0   | consistent | 0.00 | — |
+| S12  | 1  | 0  | 0   | consistent | 0.00 | 单车无边 |
+| S13  | 2  | 2  | 3   | trust_GNN | 1.00 | 跟车过近 |
+| S20  | 3  | 6  | 2   | trust_GNN | 1.00 | 合流冲突 |
+| S21  | 3  | 6  | 2   | trust_GNN | 1.00 | 三路冲突 |
+| S22  | 2  | 2  | 2   | trust_GNN | 1.00 | 紧急车辆 |
+| S30  | 3  | 6  | 0   | consistent | 0.00 | 夜间行人 |
+| S31  | 2  | 2  | 2   | trust_GNN | 1.00 | 雨天变道 |
+| S32  | 2  | 2  | 2   | trust_GNN | 1.00 | 施工路段 |
+| S33  | 4  | 12 | 0   | consistent | 0.00 | 眩光多行人 |
+
+**关键发现：**
+- 有 violation 且有边的场景（S00/S13/S20–S22/S31/S32）→ D-S K>τ_K → trust_GNN（overlap=1.0，因为两车互相为对方的唯一邻居）
+- 无 violation 的场景 → K=0.0 → consistent，无需回溯
+- 注意力权重因随机权重（未训练），所有 α≈1.0（归一化到唯一邻居），训练后会分化
+- ε_t=0.0（随机权重各头输出相同），训练后各头分化，ε_t 才有区分度
+
+---
+
+### 8.7 回归测试
+
+```
+tests/{ontology,debouncer,extraction,dynamic}：100 passed, 0 new failures ✅
+smoke_test_k_hstgan.py（return_extras=False 路径）：PASSED ✅
+smoke_test_ks_nbcf.py：PASSED ✅
+```
+
+---
+
+### 8.8 Git 提交记录
+
+| Commit | 内容 |
+|--------|------|
+| `5733e78` | feat(gnn): K-HSTGAN 骨架实现 + smoke test 通过 |
+| `e320dfd` | feat(fusion): KS-NBCF 融合框架实现 + smoke test 通过 |
+| `05a0d8f` | fix(gnn): exporter K-NN 图构建 + rgat softmax/dim bug 修复 |
+
+---
+
+### 8.9 待办（下一步）
+
+| 优先级 | 任务 |
+|--------|------|
+| ⭐⭐⭐ | `exp_multiscenario.py`：多场景训练脚本，收集第 6 章 F1/P/R 数据 |
+| ⭐⭐⭐ | 训练后评估：KS-NBCF D-S 融合 vs 纯 K-HSTGAN 对比 |
+| ⭐⭐ | 第 7 章总结与展望（不依赖实验数据） |
+| ⭐⭐ | 参考文献 GB/T 7714 整理 + 中英文摘要 |
+
