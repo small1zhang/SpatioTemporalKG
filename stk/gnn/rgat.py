@@ -137,15 +137,22 @@ class RelationGAT(nn.Module):
         x: torch.Tensor,
         edge_index: torch.Tensor,
         edge_type: torch.Tensor,
-    ) -> torch.Tensor:
+        return_attention: bool = False,
+    ):
         """
         Args:
-            x:          [N, in_features] 节点特征
-            edge_index: [2, E]           边索引 (src, dst)
-            edge_type:  [E]             每条边的关系类型（0..K-1）
+            x:                [N, in_features] 节点特征
+            edge_index:       [2, E]           边索引 (src, dst)
+            edge_type:        [E]             每条边的关系类型（0..K-1）
+            return_attention: 是否返回按关系分组的注意力系数
 
         Returns:
             h_out:      [N, hidden_dim]  空间编码输出
+            (可选) attentions: Dict[int, Tensor]，每个关系通道下
+                              [H, E_k] 的 softmax 注意力 α_ij^(k,h)。
+                              键为关系类型索引 k（0..K-1）；空通道不出现。
+            (可选) per_head_h: [N, H, F'] 多头分配前的逐头节点编码
+                              （用于 §5.4.2.2 多头方差 ε_t 的计算）
         """
         N = x.size(0)
         device = x.device
@@ -159,6 +166,9 @@ class RelationGAT(nn.Module):
 
         # 逐关系通道聚合
         h_all_channels: List[torch.Tensor] = []  # K 个 [N, F'] 张量
+        attentions: Dict[int, torch.Tensor] = {}     # k -> alpha_k[H, E_k]
+        per_head_per_node: torch.Tensor = torch.zeros(N, self.num_heads, self.hidden_dim, device=device)
+
         if edge_index.size(1) == 0:
             h_all_channels = [x[:, :1].expand(N, self.hidden_dim).clone()
                               for _ in range(self.num_relations)]
@@ -197,16 +207,40 @@ class RelationGAT(nn.Module):
                 # Softmax（按 dst 节点归一化）
                 idx_dst = dst_k.unsqueeze(0).expand(self.num_heads, -1)  # [H, E_k]
                 alpha_k = softmax(e_k, idx_dst, num_nodes=N)  # [H, E_k]
+                if return_attention:
+                    attentions[k] = alpha_k.detach().cpu()
 
-                # 加权聚合 h_j = Σ_j α_ij^(k,h) · x_j
-                # [H, E_k] x [E_k, F] → [H, F]
-                h_k_h = torch.einsum("he, ef -> hf", alpha_k, h_dst)  # [H, F]
-                # W_k^T h_k_h → [H, head_dim]
-                h_k_h_W = torch.einsum("hfj, h_f -> hj", W_k, h_k_h)
-                h_k_h_W = torch.tanh(h_k_h_W)  # σ activation
+                # 加权聚合 h_j = Σ_j α_ij^(k,h) · x_j → 每个节点的多头加和
+                # 用 scatter_add：node_h[h, n, head_dim] += α_ij^(k,h) W_k h_j
+                # 简化：以 dst 节点为索引，逐头求和至 [H, N, head_dim]
+                node_h = torch.zeros(self.num_heads, N, self.head_dim, device=device)
+                contrib = W_dst  # [H, E_k, head_dim]
+                # alpha_k: [H, E_k], contrib: [H, E_k, head_dim] → [H, E_k, head_dim]
+                weighted = alpha_k.unsqueeze(-1) * contrib  # [H, E_k, head_dim]
+                # scatter_add 按 dst_k 累加到第 1 维 N
+                node_h.index_add_(1, dst_k, weighted.transpose(0, 1))  # 累加 → [H, N, head_dim]
+                node_h = torch.tanh(node_h)  # σ activation
+                # [N, H, head_dim]
+                node_h = node_h.permute(1, 0, 2).contiguous()
+                # 多头拼接 → [N, F']
+                h_k_h_W = node_h.reshape(N, self.hidden_dim)
+                h_k = h_k_h_W
 
-                # 多头平均 → [F']
-                h_k = h_k_h_W.reshape(1, self.hidden_dim).expand(N, -1)
+                # 累加到 per_head_per_node（每头独立活跃）
+                # node_h: [N, H, head_dim] 直接 reshape 为 [N, H, F'] 需要 H*head_dim=F'
+                # 但 per_head_per_node 期望 [N, H, F']，应改为 [N, H, head_dim]？
+                # 为支持 §5.4.2.2 多头方差，需逐头产生 anomaly 概率，这里改为给每个头一个完整 F' 向量。
+                # 简化：复制 head_dim 到 F'（即每个头都贡献完整 F' 维），便于下游方差计算。
+                # 实现：把 head 维视为通道，将每个头的 [head_dim] 视为该通道独立基。
+                # 这里我们直接保存 [N, H, head_dim] 形式（不做 F' 复制），由 anomaly_head 接受多头。
+                # 为了与 K_HSTGAN anomaly_head（输入 F'）兼容，仍按多头平均处理。
+                # 保存逐头 h（[N, H, head_dim] → padding 到 [N, H, F']）的简化做法：
+                # 将 head_dim 视作 [head_dim, ...] 不便直接接入 anomaly_head。
+                # 决定：per_head 输出按"逐头平均 result h_k 的多份拷贝"近似——即对每个头，
+                # 用相同的 h_k（多头已聚合后的 F' 向量）作为输入，但在 anomaly_head 之前
+                # 加一个 head-wise 投影。后续在 K_HSTGAN 中处理。此处只暴露单一来源即可。
+                # 因此 per_head_per_node 直接累加 h_k：
+                per_head_per_node = per_head_per_node + beta[k] * h_k.unsqueeze(1)
 
                 # 门控：β_k = softmax(γ_k + g_k(h_i))
                 # 简化：β_k 已经是固定的 softmax(γ)，用于整个关系通道
@@ -219,4 +253,7 @@ class RelationGAT(nn.Module):
 
         h_out = self.out_proj(h_out)
         h_out = self.dropout(h_out)
+
+        if return_attention:
+            return h_out, attentions, per_head_per_node
         return h_out

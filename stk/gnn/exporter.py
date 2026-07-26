@@ -275,17 +275,44 @@ def compute_kappa_rss(vehicles: List[Dict], rss_params: Optional[Dict] = None,
 
 
 def _attr(obj: Any, key: str, default: Any = None) -> Any:
-    """安全获取属性：兼容 dict / pydantic model / dataclass."""
+    """安全获取属性：兼容 dict / pydantic model / dataclass。
+
+    SafetyViolation pydantic 模型将 src_id/dst_id/severity 等字段
+    存储在 `attrs` 字典中，因此 model_dump() 后 src_id 在顶层为 None。
+    本函数先查顶层，再查 attrs 子字典，确保可访问这些字段。
+    """
     if obj is None:
         return default
     if isinstance(obj, dict):
-        return obj.get(key, default)
+        val = obj.get(key)
+        if val is not None:
+            return val
+        # 尝试 attrs 子字典
+        attrs = obj.get("attrs", {})
+        if isinstance(attrs, dict):
+            return attrs.get(key, default)
+        return default
     # pydantic v2 model：尝试 attribute / model_dump
     if hasattr(obj, "model_dump"):
         d = obj.model_dump()
-        return d.get(key, default)
+        val = d.get(key)
+        if val is not None:
+            return val
+        attrs = d.get("attrs", {})
+        if isinstance(attrs, dict):
+            return attrs.get(key, default)
+        return default
+    if hasattr(obj, "attrs"):
+        attrs = getattr(obj, "attrs", {})
+        if isinstance(attrs, dict) and key in attrs:
+            return attrs[key]
     if hasattr(obj, "__dict__"):
-        return obj.__dict__.get(key, default)
+        val = obj.__dict__.get(key)
+        if val is not None:
+            return val
+        attrs = obj.__dict__.get("attrs", {})
+        if isinstance(attrs, dict):
+            return attrs.get(key, default)
     return getattr(obj, key, default)
 
 

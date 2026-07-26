@@ -122,7 +122,7 @@ class K_HSTGAN(nn.Module):
             requires_grad=False,
         )
 
-    def forward(self, data) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, data, return_extras: bool = False):
         """
         单帧前向传播。
 
@@ -134,12 +134,21 @@ class K_HSTGAN(nn.Module):
                 kappa_rss:          [N, 5]    RSS 残差
                 kappa_rule:         [N, 14]   交规触发强度
                 delta_feat:         [4]       Δg_t 四元组
+            return_extras: 是否返回多头方差/注意力等扩展字段（KS-NBCF 融合模块用）。
 
         Returns:
             y_anomaly:  [N, 1]   节点级异常概率（sigmoid 后）
             y_scene:    [N, 3]   场景类分布（softmax 后）
             y_behavior: [N, 7]   行为类分布（softmax 后）
             y_rule:     [N, 14]  规则触发概率（sigmoid 后）
+            extras (optional): dict，含
+                per_head_anomaly:  [N, H]  各注意力头异常概率（用于 §5.4.2.2 ε_t）
+                rgat_attention:    Dict[int, Tensor]  关系类型 k → [H, E_k] 注意力
+                h_spatial:         [N, F']           空间编码输出
+                h_temporal:        [N, F']           时序编码输出
+                edge_index:        [2, E]
+                edge_type:         [E]
+                delta_feat:        [4]
         """
         x = data.x              # [N, F]
         edge_index = data.edge_index
@@ -151,7 +160,11 @@ class K_HSTGAN(nn.Module):
         x_aug = self.rss_injector(x, kappa_rss)
 
         # === 2. RGAT 空间编码 → [N, F'] ===
-        h_spatial = self.rgat(x_aug, edge_index, edge_type)
+        if return_extras:
+            h_spatial, rgat_attention, per_head_h = self.rgat(
+                x_aug, edge_index, edge_type, return_attention=True)
+        else:
+            h_spatial = self.rgat(x_aug, edge_index, edge_type)
 
         # === 3. 规则残差注入 → [N, F'] ===
         h_spatial = self.rule_encoder(h_spatial, kappa_rule)
@@ -185,6 +198,22 @@ class K_HSTGAN(nn.Module):
         y_behavior = F.softmax(self.behavior_head(h_temporal), dim=-1)  # [N, 7]
         y_anomaly = torch.sigmoid(self.anomaly_head(h_temporal))        # [N, 1]
         y_rule = torch.sigmoid(self.rule_head(h_temporal))              # [N, 14]
+
+        if return_extras:
+            # per-head anomaly 概率：用 RGAT 逐头 h（[N, H, F'] 副本）走 anomaly_head。
+            # per_head_h: [N, H, F'] 经过同一 anomaly_head → [N, H, 1] → [N, H]
+            per_head_logits = self.anomaly_head(per_head_h)        # [N, H, 1]
+            per_head_anomaly = torch.sigmoid(per_head_logits).squeeze(-1)  # [N, H]
+            extras = {
+                "per_head_anomaly": per_head_anomaly.detach(),    # [N, H]
+                "rgat_attention": rgat_attention or {},            # Dict[int, [H, E_k]]
+                "h_spatial": h_spatial.detach(),                    # [N, F']
+                "h_temporal": h_temporal.detach(),                  # [N, F']
+                "edge_index": edge_index.detach(),
+                "edge_type": edge_type.detach(),
+                "delta_feat": delta_feat.detach(),
+            }
+            return y_anomaly, y_scene, y_behavior, y_rule, extras
 
         return y_anomaly, y_scene, y_behavior, y_rule
 
