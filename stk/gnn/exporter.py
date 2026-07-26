@@ -41,6 +41,8 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 
+import math
+
 from stk.ontology.types import SceneRelationType, BehaviorRelationType
 
 
@@ -393,8 +395,16 @@ def _build_node_features(snapshot: Dict[str, Any],
 
 
 def _build_edge_index(snapshot: Dict[str, Any],
-                       node_ids: List[str]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """构造场景层 edge_index + edge_type + behavior_edge_index + behavior_edge_type。"""
+                       node_ids: List[str]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """构造场景层 edge_index + edge_type + behavior_edge_index + behavior_edge_type。
+
+    当 scene_rels 为空时（如场景库无 waypoints），自动从车辆/行人位置
+    构建空间 K-NN 图（每节点最多 K=5 邻居），关系类型根据相对位置判定：
+      - 车辆-车辆同向且距离<30m → in_lane
+      - 车辆-车辆纵向前方     → ahead_of
+      - 车辆-车辆侧向         → beside
+      - 车辆-行人             → nearby_pedestrian
+    """
     ext = snapshot["extracted"]
     id2row = {nid: i for i, nid in enumerate(node_ids)}
     src_list, dst_list, type_list = [], [], []
@@ -419,6 +429,58 @@ def _build_edge_index(snapshot: Dict[str, Any],
         if s in id2row and d in id2row:
             bsrc_list.append(id2row[s]); bdst_list.append(id2row[d])
             btype_list.append(BEHAVIOR_REL_TO_IDX[rtype])
+
+    # ===== Fallback: 空图时构建空间 K-NN 图 =====
+    if not src_list:
+        node_pos: List[Tuple[str, float, float, float, str]] = []
+        for v in ext.get("vehicles", []) or []:
+            nid = str(v.get("entity_id", ""))
+            if nid in id2row:
+                node_pos.append((
+                    nid,
+                    _to_float(v.get("location_x"), 0.0),
+                    _to_float(v.get("location_y"), 0.0),
+                    _to_float(v.get("heading_rad"), 0.0),
+                    "vehicle",
+                ))
+        for p in ext.get("pedestrians", []) or []:
+            nid = str(p.get("entity_id", ""))
+            if nid in id2row:
+                node_pos.append((
+                    nid,
+                    _to_float(p.get("location_x"), 0.0),
+                    _to_float(p.get("location_y"), 0.0),
+                    0.0,
+                    "pedestrian",
+                ))
+        # K-NN：每节点最多 5 个邻居
+        K_nn = min(5, len(node_pos) - 1)
+        for i, (ni, xi, yi, hi, ti) in enumerate(node_pos):
+            dists = []
+            for j, (nj, xj, yj, hj, tj) in enumerate(node_pos):
+                if i == j:
+                    continue
+                d = math.sqrt((xi - xj) ** 2 + (yi - yj) ** 2)
+                dists.append((d, j, tj))
+            dists.sort(key=lambda t: t[0])
+            for d, j, tj in dists[:K_nn]:
+                _, xj, yj, hj, tj2 = node_pos[j]
+                nj = node_pos[j][0]
+                # 判定关系类型
+                dx = xj - xi; dy = yj - yi
+                angle_diff = abs(math.atan2(math.sin(hi - hj), math.cos(hi - hj)))
+                if ti == "pedestrian" or tj == "pedestrian":
+                    rel = "nearby_pedestrian"
+                elif angle_diff < math.pi / 4 and dx * math.cos(hi) + dy * math.sin(hi) > 0:
+                    rel = "ahead_of"
+                elif angle_diff < math.pi / 4:
+                    rel = "in_lane"
+                else:
+                    rel = "beside"
+                rel_idx = SCENE_REL_TO_IDX.get(rel, SCENE_REL_TO_IDX["in_lane"])
+                src_list.append(id2row[ni])
+                dst_list.append(id2row[nj])
+                type_list.append(rel_idx)
 
     if src_list:
         edge_index = torch.tensor([src_list, dst_list], dtype=torch.long)

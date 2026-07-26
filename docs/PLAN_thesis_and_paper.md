@@ -777,6 +777,95 @@ return (y_final, m_fused(y_final), explanation)
 - Table 4: 行为检测准确率（11 行 × 3 指标）
 - Table 5: 规则检测能力（14+3=17 行 × 2 指标，含 DR/FAR）
 
+#### 4.3.1 RQ1.5: 横向图谱对比实验（创新点①，新增）
+
+> **设计动机**：RQ1.1–RQ1.4 是"以 CARLA 真值为 GT 的自评"，不存在与其它图谱方法的并排对比。为应对"为何不跟 nuScenes KG / roadscene2vec / CoSI 横向比较"的审稿质疑，本节补充两类横向对比：**退化式图谱对比**（路径 A，把 STKG 退化为缺少某创新组件的简化图谱作为对手）+ **配置开关对比**（路径 B/C，把 STKG 在不同配置下重跑作为对照）。所有实验**无需新标注数据**，只需复用 `data/dataset/frame_actors.csv`（1.34M 行 × 38 列）与 `data/long_run/chunk_*.json`，并通过 `run_phases_1_5.py` 加不同 CLI flag 离线重跑。
+
+##### A. 退化式图谱对比（防御性最强，论文核心对比项）
+
+将 STKG 退化为缺少某创新组件的"简化图谱"，在同一套 14 场景库 + 140 异常注入上跑同一套 RQ1 指标，证明完整 STKG 相对简化版的提升。退化体采用"配置开关 + 模块替换"实现，不修改主分支代码。
+
+| 退化体编号 | 名称 | 去掉什么 | 模拟的对手图谱 | 关键评测指标 | 实现方式 | 工作量 |
+|-----------|------|----------|----------------|-------------|----------|--------|
+| DG-A | STKG-tiny | 去掉属性版本化（`stk/dynamic/version.py` 关闭 `VersionManager`） | 静态属性图谱（无时态） | 属性更新延迟、属性一致性 Acc | 短路 `AttrVersion` 直接覆写 | ⭐⭐ 1 天 |
+| DG-B | STKG-static | 去掉差分图 + 生命周期（关闭 `IncrementalEngine`，每帧全量重算） | 静态交通本体（如 hand-crafted ontology） | 每帧处理时间、峰值内存、节点冗余率 | 跳过 Phase 4 dynamic，全量构建 | ⭐⭐ 2 天 |
+| DG-C | STKG-noRule | 去掉规则层（`rules/generator.py` 不调用，关闭 RSS + 14 交规） | nuScenes KG 类（无规则嵌入） | 规则检测 DR→0、下游 SV 节点不存在 | 配置 `pipeline.yaml` 中 `rules: false` | ⭐ 半天 |
+| DG-D | STKG-flatTime | 把 50ms 帧级时间合并为秒级（采样 20 帧合并为 1 帧） | 传统 TKG（如 TNTComplEx 复用，秒级时间分辨率） | 行为漏检率↑、行为分辨率 MAE | 在 `run_phases_1_5.py` 增 `--time-downsample 20` | ⭐⭐ 1.5 天 |
+| DG-E | STKG-noCrossLayer | 去掉跨层桥接边（`behavior/manifest.py` 不调用 `link_maneuver_to_scene` / `link_interaction_to_scene`） | 单层图谱（场景层与行为层不联动） | 跨层边数=0、下游 SV 检出↓、行为可解释性↓ | 桥接函数返回空 | ⭐ 半天 |
+| DG-F | STKG-noSceneFilter | 关闭 ROI 与背景过滤（`exclude_lanes=false`、`filter_scene_spatial=false`、`filter_behavior_detectors=false`） | 全量扫描图谱（无 ROI 剪枝） | 节点数↑30x、边数↑100x、行为误报率↑、平均度↑ | 全部置 false | ⭐ 半天 |
+
+**对比矩阵**（6 退化体 × 4 指标，单一产出表）：
+
+| 退化体 | 关系 P/R/F1 | 行为 P/R/F1 | 规则 DR/FAR | 属性 MAE | 帧处理时间 | 节点数 | 边数 |
+|--------|:-----------:|:-----------:|:-----------:|:--------:|:----------:|:------:|:----:|
+| 完整 STKG（baseline） | — | — | — | — | — | — | — |
+| DG-A (tiny) | = | = | = | **↑** | = | = | = |
+| DG-B (static) | = | = | = | = | **↑↑** | **↑** | = |
+| DG-C (noRule) | = | = | **DR→0** | = | ↓（少跑阶段）| = | ↓ |
+| DG-D (flatTime) | = | **↓↓** | ↓ | = | ↓ | ↓ | ↓ |
+| DG-E (noCrossLayer) | = | = | ↓ | = | = | = | **↓** |
+| DG-F (noSceneFilter) | =（关系更全）| **P↓ R=** | = | = | ↑ | **↑↑** | **↑↑** |
+
+> 箭头方向相对完整 STKG：↑ 表示指标值上升（不一定好），↓↓ 表示能力显著下降；**加粗**为预期主要差异点。
+
+##### B. 配置开关对比（性能-精度权衡分析）
+
+对 STKG 内已暴露的配置开关做"配置扫描"，生成配置-性能权衡曲线。这部分既是横向对比（同一图谱在不同配置下的行为差异），也是工程贡献的展示（说明"我们的开关设计允许灵活权衡"。
+
+| 编号 | 配置因子 | 扫描取值 | 评测指标 | 产出 |
+|------|----------|----------|----------|------|
+| CFG-1 | `legacy_full_pairing` | true / false | RSS 扫描时间 / SV 数 / Runtime O(N²) vs ROI | 验证 ROI 的吞吐收益 |
+| CFG-2 | `importance_threshold` | -1（禁用）/ 0.10 / 0.20 / 0.30 / 0.40 / 0.50 | 节点裁剪率 / 关系 F1 / 行为 F1 / 规则 DR | 稀疏度-F1 曲线 |
+| CFG-3 | `exclude_lanes` | true / false | 节点数 / 边数 / 平均度 / 下游规则检测 DR | 紧凑本体 vs 完整本体的规模-效果对照 |
+| CFG-4 | `filter_behavior_detectors` | true / false | ManeuverNode 数 / InteractionEvent 数 / 行为覆盖率 | ROI 在行为层的剪枝效果 |
+| CFG-5 | `filter_scene_spatial` | true / false | 关系边数 / 关系覆盖率 / Relation P/R | ROI 在场景层的剪枝效果 |
+| CFG-6 | 阈值灵敏度组合 | `ttc_critical ∈ {2,3,4,5,6}` × `pedestrian_distance ∈ {3,5,7,10}` | 行为 F1 / 规则 DR / FAR | 阈值-检出灵敏度热力图 |
+
+##### C. Tier 增量贡献对比（4 档风险梯度）
+
+按 `frame_labels.csv.scenario_id` 把帧分为 A/B/C/D 四档，按"叠加增量"方式评测每加一档对应的图谱增量与检出增量。直接证明"跨层联动机制+多车冲突+异常注入"逐层级带来可观增益。
+
+| Tier | 帧数 | 场景数 | 节点增量 | 边增量 | SV 检出增量 | RSS 检出增量 | 跨层边增量 |
+|------|------|--------|----------|--------|-------------|-------------|-----------|
+| A（基线 3 场景） | — | S00–S02 | — | — | 0 | 0 | 0 |
+| B（A + 4 单点异常） | — | +S10–S13 | +ΔN_B | +ΔE_B | +ΔSV_B | +ΔRSS_B | +ΔCL_B |
+| C（B + 3 多车冲突） | — | +S20–S22 | +ΔN_C | +ΔE_C | +ΔSV_C | +ΔRSS_C | +ΔCL_C |
+| D（C + 4 跨层联动） | — | +S30–S33 | +ΔN_D | +ΔE_D | +ΔSV_D | +ΔRSS_D | +ΔCL_D |
+
+> 该表证明"每档风险梯度都带来可量化的图谱价值增量"，为论文创新点①提供"为什么需要 4 层本体 + 跨层联动"的实证支撑。
+
+##### 实施依赖与产物
+
+- **批跑脚本**（新增）：`scripts/pipeline/ablation_compare.py`，遍历 `scenario_library.all_scenarios()` × 一组配置组合 → 调 `run_phases_1_5.py` 离线重跑 → 写入 `data/runs/ablation/<config_name>/` → 汇总对照表
+- **GT 规则码回填脚本**（新增）：`scripts/pipeline/auto_label_rule_codes.py`，把 `SCENARIO_REGISTRY[scenario_id].expected_rules` 写入 `frame_labels.csv.rule_codes`（当前 41,150 行全空），同时与 `anomaly_log.json` 交叉验证
+- **输出目录**：`data/runs/ablation/`
+- **产出表格**：
+  - Table 5-A: 退化式图谱对比（6 行 × 8 指标矩阵）
+  - Table 5-B: 配置开关对比汇总（6 项配置的对照表）
+  - Table 5-C: Tier A→D 增量贡献（4 行 × 7 指标）
+  - Fig.2-A: 重要性阈值稀疏度-F1 曲线
+  - Fig.2-B: 阈值灵敏度热力图
+
+##### 13 项子实验与论文 RQ 映射
+
+| 实验编号 | 类型 | 归入论文 | 一句话描述 |
+|---------|------|---------|------------|
+| DG-A 退化体 | 退化 | RQ1.5-A | 关属性版本化 → 属性时态能力 |
+| DG-B 退化体 | 退化 | RQ1.5-A | 关增量引擎 → 静态本体对照 |
+| DG-C 退化体 | 退化 | RQ1.5-A | 关规则层 → 无规则嵌入 KG |
+| DG-D 退化体 | 退化 | RQ1.5-A | 关 50ms 分辨率 → 秒级 TKG |
+| DG-E 退化体 | 退化 | RQ1.5-A | 关跨层桥接 → 单层本体 |
+| DG-F 退化体 | 退化 | RQ1.5-A | 关 ROI 剪枝 → 全量扫描 |
+| CFG-1 配置 | 性能 | RQ2.6 | EGO-ROI vs 全量配对 |
+| CFG-2 配置 | 性能 | RQ2.6 | 重要性阈值稀疏度-F1 |
+| CFG-3 配置 | 性能 | RQ2.6 | 排除车道紧凑本体 |
+| CFG-4 配置 | 性能 | RQ2.6 | 行为过滤剪枝 |
+| CFG-5 配置 | 性能 | RQ2.6 | 场景空间过滤剪枝 |
+| CFG-6 配置 | 性能 | RQ1.5-B | 阈值灵敏度热力图 |
+| Tier ABCD | 增量 | RQ1.5-C | 4 档风险梯度逐层级贡献 |
+
+**预测工作量**：约 1.5–2 周（退化体改造 5 天 + 配置扫描运行 1 天 + 批跑脚本 2 天 + 报告聚合 1 天 + 异常 × 规则混淆矩阵 1 天）。
+
 ### 4.4 RQ2: 流式处理性能评测（创新点①）
 
 | 子实验编号 | 评测内容 | 指标 | 实现方式 | 工作量 |
@@ -791,6 +880,25 @@ return (y_final, m_fused(y_final), explanation)
 - Table 6: 5 阶段 avg/P99 延迟
 - Fig.3: 不同时长下的 FPS 曲线
 - Fig.4: 增量 vs 全量处理时间对比
+
+#### 4.4.1 RQ2.6: 配置性能敏感性对比（创新点①，新增）
+
+> **设计动机**：RQ2.1–RQ2.5 评的是"默认配置下"的吞吐/延迟/内存，但 STKG 暴露了一组配置开关（`legacy_full_pairing` / `importance_threshold` / `exclude_lanes` / `filter_*`），不同配置在"图谱规模 vs 检出精度 vs 运行时间"上有显著权衡。这部分实验把"配置空间"显式测出来，为论文提供"工程权衡曲线"，也证明"系统设计是可配置的、可部署友好的"。
+
+| 子实验编号 | 评测对象 | 配置因子 | 取值集合 | 指标 | 实现方式 | 工作量 |
+|-----------|---------|----------|----------|------|---------|--------|
+| RQ2.6.1 | RSS 扫描策略 | `legacy_full_pairing` | {true, false} | RSS 扫描时间 / SV 数 / Runtime（N² vs ROI） | `config/ego_centric.yaml` toggle，每场 20min × 2 配置 | ⭐ 半天 |
+| RQ2.6.2 | 重要性阈值扫描 | `importance_threshold` | {-1, 0.10, 0.20, 0.30, 0.40, 0.50}（6 档） | 节点裁剪率 / 关系 F1 / 规则 DR / FPS | `--thresholds-json` 6 次重跑 + 聚合 | ⭐⭐ 1 天 |
+| RQ2.6.3 | 紧凑本体 vs 完整本体 | `exclude_lanes` / `exclude_road_elements` | {true, false}（2×2 阶乘） | 节点数 / 边数 / 平均度 / 下游规则 DR / 内存 | 4 次 20min 重跑 + 图规模比对 | ⭐⭐ 1 天 |
+| RQ2.6.4 | ROI 在各层的剪枝效果 | `filter_behavior_detectors` × `filter_scene_spatial` | {(F,F), (T,F), (F,T), (T,T)} | ManeuverNode 数 / InteractionEvent 数 / 关系边数 / FPS | 4 次 20min 重跑 | ⭐ 半天 |
+
+**输出目录**：`data/runs/ablation/`（与 RQ1.5 共用一个 batch runner `scripts/pipeline/ablation_compare.py`）
+
+**产出**：
+- Table 6-A: RSS 扫描策略对比（2 行 × 4 指标）
+- Table 6-B: 重要性阈值扫描（6 行 × 5 指标）+ Fig.3-A 稀疏度-F1 曲线
+- Table 6-C: 紧凑本体 vs 完整本体 2×2 阶乘（4 行 × 4 指标）
+- Table 6-D: ROI 双层过滤 2×2 阶乘（4 行 × 5 指标）
 
 ### 4.5 RQ3: K-HSTGAN 异常检测效果评测（创新点②）
 

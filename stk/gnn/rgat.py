@@ -16,7 +16,6 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.utils import softmax
 
 
 # === 关系类型先验（Table 4-2）===
@@ -193,32 +192,40 @@ class RelationGAT(nn.Module):
                 h_src = x[src_k]  # [E_k, F]
                 h_dst = x[dst_k]  # [E_k, F]
 
-                # [H, E_k, head_dim]
-                W_src = torch.einsum("hfj, ef -> ehj", W_k, h_src)  # [H, E_k, head_dim]
-                W_dst = torch.einsum("hfj, ef -> ehj", W_k, h_dst)  # [H, E_k, head_dim]
+                # einsum 'hfj, ef -> hej'：先 H 后 E_k，保持输出 [H, E_k, head_dim] 形状
+                W_src = torch.einsum("hfj, ef -> hej", W_k, h_src)  # [H, E_k, head_dim]
+                W_dst = torch.einsum("hfj, ef -> hej", W_k, h_dst)  # [H, E_k, head_dim]
 
                 # 注意力系数 e_ij^(k,h)：LeakyReLU(a_k^T [W_src ‖ W_dst])
+                # W_src: [H, E_k, head_dim]，a_k: [H, 2*head_dim, 1]
+                # pair = [W_src ‖ W_dst]: [H, E_k, 2*head_dim]
+                # 正确 einsum：contract over 2*head_dim → [H, E_k, 1] → squeeze → [H, E_k]
                 a_k = self.a[k]  # [H, 2*head_dim, 1]
                 pair = torch.cat([W_src, W_dst], dim=-1)  # [H, E_k, 2*head_dim]
+                # a_k[h,a,b]*pair[h,e,a] → sum over a → [h,e,b]  b=1 → squeeze → [H,E_k]
                 e_k = self.leaky_relu(
-                    torch.einsum("hab, heb -> hea", a_k, pair).squeeze(-1)
+                    torch.einsum("hab,hea->heb", a_k, pair).squeeze(-1)
                 )  # [H, E_k]
 
-                # Softmax（按 dst 节点归一化）
-                idx_dst = dst_k.unsqueeze(0).expand(self.num_heads, -1)  # [H, E_k]
-                alpha_k = softmax(e_k, idx_dst, num_nodes=N)  # [H, E_k]
+                # Softmax 按 dst 节点归一化（H 头共享同一 dst_k 索引，逐头手工 softmax）
+                # 避免 scatter max 的维度问题，改用逐头循环实现数值稳定 softmax
+                e_k_max = e_k.max(dim=1, keepdim=True).values  # [H, 1] 全局 max（保守但安全）
+                e_k_exp = (e_k - e_k_max).exp()  # [H, E_k]
+                denom = torch.zeros(self.num_heads, N, device=device)  # [H, N]
+                denom.index_add_(1, dst_k, e_k_exp)  # source.size(1)=E_k == len(dst_k) ✓
+                alpha_k = e_k_exp / denom[:, dst_k].clamp(min=1e-8)  # [H, E_k]
                 if return_attention:
                     attentions[k] = alpha_k.detach().cpu()
 
                 # 加权聚合 h_j = Σ_j α_ij^(k,h) · x_j → 每个节点的多头加和
                 # 用 scatter_add：node_h[h, n, head_dim] += α_ij^(k,h) W_k h_j
                 # 简化：以 dst 节点为索引，逐头求和至 [H, N, head_dim]
-                node_h = torch.zeros(self.num_heads, N, self.head_dim, device=device)
+                node_h = torch.zeros(self.num_heads, N, self.head_dim, device=device)  # [H, N, head_dim]
                 contrib = W_dst  # [H, E_k, head_dim]
                 # alpha_k: [H, E_k], contrib: [H, E_k, head_dim] → [H, E_k, head_dim]
                 weighted = alpha_k.unsqueeze(-1) * contrib  # [H, E_k, head_dim]
-                # scatter_add 按 dst_k 累加到第 1 维 N
-                node_h.index_add_(1, dst_k, weighted.transpose(0, 1))  # 累加 → [H, N, head_dim]
+                # scatter_add 按 dst_k 累加到第 1 维 N：source.size(1)=E_k == dst_k.numel() ✓
+                node_h.index_add_(1, dst_k, weighted)  # [H, N, head_dim]
                 node_h = torch.tanh(node_h)  # σ activation
                 # [N, H, head_dim]
                 node_h = node_h.permute(1, 0, 2).contiguous()
