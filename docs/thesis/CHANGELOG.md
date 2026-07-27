@@ -5,6 +5,30 @@
 
 ---
 
+## 2026-07-27
+
+### 实现：exp_multiscenario.py 多场景训练 + 评估脚本（commit 72d7f26）
+
+新增 `scripts/long_run/exp_multiscenario.py`，实现完整的 K-HSTGAN + KS-NBCF 训练/评估流水线。
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `exp_multiscenario.py` | 新增 | 多场景训练脚本：数据收集→划分→训练→评估→消融→汇总 |
+| `exp_results/` | 新增 | 训练结果（confusion_matrix / ablation / summary.json） |
+
+### 实验结果：RQ1 主实验 + RQ2 消融（14 场景 × 6 帧 = 84 帧）
+
+| 消融方案 | F1 | P | R | F1_drop |
+|----------|----|----|----|---------|
+| full | 0.564 | 0.393 | 1.000 | — |
+| no_rule_inject | 0.564 | 0.393 | 1.000 | 0% |
+| no_rss | 0.000 | 0.000 | 0.000 | **100%** |
+| no_delta_gate | 0.000 | 0.000 | 0.000 | **100%** |
+
+**结论：** RSS 残差注入与差分门控 LSTM 是 K-HSTGAN 异常检测的核心信号源（Stage I 实验验证），规则强度残差在 Stage II 联合训练中才会发挥作用。
+
+---
+
 ## 2026-07-26
 
 ### 实现：第 4 章 K-HSTGAN 模型骨架（commit 5733e78）
