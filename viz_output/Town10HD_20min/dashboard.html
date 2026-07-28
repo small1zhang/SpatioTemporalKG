@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>统计仪表盘 · STKG</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<div class="tab-bar">
+  <a href="graph_view.html">图谱视图</a>
+  <a href="data_table.html">数据表格</a>
+  <a class="active">统计仪表盘</a>
+  <span class="town-badge">🌍 <span id="town-label">--</span></span>
+</div>
+<div class="dash-sub-tabs">
+  <a class="active" onclick="switchDash('overview')">概览</a>
+  <a onclick="switchDash('rss')">RSS规则</a>
+  <a onclick="switchDash('anomaly')">异常分布</a>
+  <a onclick="switchDash('ie')">交互类型</a>
+  <a onclick="switchDash('resp')">责任分析</a>
+  <a onclick="switchDash('trend')">趋势</a>
+</div>
+<div class="dash-content" id="dash-content"></div>
+<script>
+/* ── shared constants from shared.js ── */
+const TC0={Vehicle:'#3b82f6',TrafficLight:'#ef4444',RoadElement:'#6b7280',EnvironmentSnapshot:'#22c55e',Maneuver:'#f59e0b',InteractionEvent:'#8b5cf6',SafetyViolation:'#ef4444',ResponsibilityAssignment:'#f97316',Junction:'#06b6d4',ScenarioSnapshot:'#a78bfa',Pedestrian:'#eab308',Rule:'#fbbf24',BehaviorRelation:'#ec4899'};
+const ANOM_C0={sudd_brk:'#ef4444',sudd_stp:'#dc2626',avd_col:'#f97316',jun_ny:'#f59e0b',rev_drive:'#a855f7',ped_crs:'#eab308',obs_blk:'#6b7280'};
+const ANOM_LABEL0={sudd_brk:'急刹',sudd_stp:'急停',avd_col:'紧急变道',jun_ny:'路口不让行',rev_drive:'逆向',ped_crs:'行人横穿',obs_blk:'遮挡'};
+const RSS_CC0={R4:'#f97316',R5:'#fb923c',R6:'#f59e0b',R7:'#fbbf24',R8:'#fde68a',R13a:'#a855f7',R13b:'#c084fc',R14a:'#9333ea',R14b:'#a78bfa',R15:'#d8b4fe',R16:'#e9d5ff',R17:'#f3e8ff'};
+const RSS_CD0={R4:'对向来车未避让',R5:'闯红灯',R6:'路口未让行',R7:'变道未让行',R8:'禁行方向行驶',R13a:'RSS纵向距离',R13b:'RSS纵向危险制动',R14a:'RSS侧向距离',R14b:'RSS侧向并道',R15:'路权优先级',R16:'行人近距',R17:'视线遮挡'};
+const RL_CC0={RSS:'#a855f7',TrafficLaw:'#f97316'};
+const COL=['#3b82f6','#8b5cf6','#22c55e','#f59e0b','#ef4444','#f97316','#ec4899','#06b6d4','#a78bfa','#6b7280'];
+function TC(t){return TC0[t]||'#6b7280';}
+function AC(t){return ANOM_C0[t]||'#6b7280';}
+function RC(r){return RSS_CC0[r]||'#6b7280';}
+function RD(r){return RSS_CD0[r]||r;}
+
+/* ── SVG helper ── */
+function mkSvg(w,h,attrs){return '<svg width="'+w+'" height="'+h+'"'+(attrs||'')+'>';}
+
+/* ── Tooltip ── */
+function tipShow(html,x,y){var tt=document.getElementById('stip');tt.innerHTML=html;tt.style.opacity=1;tt.style.left=x+'px';tt.style.top=y+'px';}
+function tipHide(){var tt=document.getElementById('stip');tt.style.opacity=0;}
+
+/* ── Tab ── */
+function switchDash(tab){switchDashTab(tab);}
+let dashSub='overview';
+function switchDashTab(tab){
+  dashSub=tab;
+  document.querySelectorAll('.dash-sub-tabs a').forEach(function(a){a.classList.remove('active');});
+  var tabs=document.querySelectorAll('.dash-sub-tabs a');
+  var names=['overview','rss','anomaly','ie','resp','trend'];
+  tabs[names.indexOf(tab)].classList.add('active');
+  renderAll();
+}
+
+/* ══════════════════════════════════════
+   OVERVIEW
+   ══════════════════════════════════════ */
+function renderOverview(){
+  var vs=KG.vizStats; if(!vs)return;
+  var d=document.getElementById('dash-content');
+  var meta=KG.summary||{};
+  /* count nodes */
+  var nTypes={};
+  // use frame 0 snapshot
+  var nodes=KG.getNodesInFrame(0);
+  nodes.forEach(function(n){nTypes[n.type]=(nTypes[n.type]||0)+1;});
+  var totalN=nodes.length;
+
+  var slices=Object.keys(nTypes).sort(function(a,b){return nTypes[b]-nTypes[a];});
+  /* donut */
+  var dw=260,dh=190,r=70,ri=35,cx=cw/2+40,cy=90;
+  var custTitle='<svg width="260" height="190">';
+  var ang=0,sgn=slices.length;
+  slices.forEach(function(t,i){
+    var cnt=nTypes[t],pct=cnt/Math.max(totalN,1);
+    var a1=ang,a2=ang+pct*2*Math.PI;
+    ang+=pct*2*Math.PI;
+    var x1=cx+r*Math.cos(a1),y1=cy+r*Math.sin(a1);
+    var x2=cx+r*Math.cos(a2),y2=cy+r*Math.sin(a2);
+    var lg=a2-a1>Math.PI?1:0;
+    custTitle+='<path d="M'+cx+','+cy+' L'+x1+','+y1+' A'+r+','+r+' 0 '+lg+' 1 '+x2+','+y2+' Z" fill="'+TC(t)+'" stroke="'+(i===0?'#e0e0e0':'#0f1117')+'" stroke-width="1.5" style="cursor:pointer" onmouseover="tipShow(\'<b>'+t+'</b><br>'+cnt.toLocaleString()+' ('+pct.toFixed(1)+'%)\',event.clientX,event.clientY)" onmouseout="tipHide()"/>';
+  });
+  custTitle+='<circle cx="'+cx+'" cy="'+cy+'" r="'+ri+'" fill="var(--card)"/>';
+  custTitle+='<text x="'+cx+'" y="'+(cy+5)+'" text-anchor="middle" fill="#e0e0e0" font-size="12" font-weight="700">'+(totalN/1000).toFixed(1)+'k</text>';
+  custTitle+='</svg>';
+
+  /* meta info row */
+  var ri2=['总帧数','总分片','总节点','总边'];
+  var rv=[KG.summary?KG.summary.total_frames:'--',KG.summary?KG.summary.shards.length:'--',KG.summary?KG.summary.total_graph_nodes:'--',KG.summary?KG.summary.total_graph_edges:'--'];
+  var metaRow='<div class="grid-4">';
+  for(var i=0;i<ri2.length;i++){
+    metaRow+='<div class="metric-card"><div class="metric-value">'+(rv[i]||'--')+'</div><div class="metric-label">'+ri2[i]+'</div></div>';
+  }
+  metaRow+='</div>';
+
+  /* trend line */
+  var ft=KG.vizStats.frame_trend||[];
+  var tw=560,th=160,pm={l:36,r:6,t:14,b:18},cw2=tw-pm.l-pm.r,ch2=th-pm.t-pm.b;
+  var mN=Math.max.apply(null,ft.map(function(f){return f.nodes;}))||1;
+  var mE=Math.max.apply(null,ft.map(function(f){return f.edges;}))||1;
+  var trendSvg='<svg width="560" height="160">';
+  /* grid */
+  for(var g=0;g<5;g++){var gx=pm.l+g*cw2/4;trendSvg+='<line x1="'+gx+'" y1="'+pm.t+'" x2="'+gx+'" y2="'+(pm.t+ch2)+'" stroke="#2a2d3a" stroke-width="0.5"/>';}
+  for(var g=0;g<5;g++){var gy=pm.t+ch2-g*ch2/4;trendSvg+='<line x1="'+pm.l+'" y1="'+gy+'" x2="'+(pm.l+cw2)+'" y2="'+gy+'" stroke="#2a2d3a" stroke-width="0.5"/>';}
+  /* axes line */
+  trendSvg+='<line x1="'+pm.l+'" y1="'+(pm.t+ch2)+'" x2="'+(pm.l+cw2)+'" y2="'+(pm.t+ch2)+'" stroke="#8b8fa3" stroke-width="1"/>';
+  trendSvg+='<line x1="'+pm.l+'" y1="'+pm.t+'" x2="'+pm.l+'" y2="'+(pm.t+ch2)+'" stroke="#8b8fa3" stroke-width="1"/>';
+  /* nodes line */
+  var ptsN=[],ptsE=[];
+  var st2=Math.max(1,Math.floor(ft.length/500));
+  for(var i=0;i<ft.length;i+=st2){
+    var xx=pm.l+(i/Math.max(ft.length-1,1))*cw2;
+    ptsN.push(xx+','+(pm.t+ch2-(ft[i].nodes/mN)*ch2*0.9));
+    ptsE.push(xx+','+(pm.t+ch2-(ft[i].edges/mE)*ch2*0.9));
+  }
+  trendSvg+='<polyline points="'+ptsN.join(' ')+'" fill="none" stroke="#3b82f6" stroke-width="1.5" opacity="0.85"/>';
+  trendSvg+='<polyline points="'+ptsE.join(' ')+'" fill="none" stroke="#a855f7" stroke-width="1.5" opacity="0.85"/>';
+  /* legends */
+  trendSvg+='<rect x="38" y="10" width="8" height="3" fill="#3b82f6"/><text x="48" y="14" fill="#8b8fa3" font-size="9">节点</text>';
+  trendSvg+='<rect x="90" y="10" width="8" height="3" fill="#a855f7"/><text x="100" y="14" fill="#8b8fa3" font-size="9">边</text>';
+  trendSvg+='</svg>';
+
+  /* type list */
+  var nList='<div style="display:grid;grid-template-columns:1fr 1fr;gap:0">';
+  slices.forEach(function(t){
+    nList+='<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px">'+
+      '<span class="dot" style="background:'+TC(t)+';width:8px;height:8px;display:inline-block;border-radius:50%"></span>'+
+      '<span style="flex:1">'+t+'</span>'+
+      '<span style="color:#8b8fa3;font-size:10px">'+nTypes[t].toLocaleString()+'</span>'+
+    '</div>';
+  });
+  nList+='</div>';
+
+  d.innerHTML=
+    metaRow+
+    '<div class="grid-2x2">'+
+      '<div class="card"><div class="chart-container"><div class="card-header"><span class="dot"></span>节点类型分布</div>'+custTitle+nList+'</div></div>'+
+      '<div class="card"><div class="chart-container"><div class="card-header"><span class="dot"></span>动态趋势</div>'+trendSvg+'</div></div>'+
+      (vs.rss_dist?'<div class="card"><div class="chart-container"><div class="card-header"><span class="dot"></span>RSS规则数</div>'+
+        Object.keys(vs.rss_dist.by_code||{}).length+' 条<br>'+
+        (vs.rss_dist.total_sv||0)+' violations<br>'+
+        (vs.rss_dist.total_resp||0)+' 责任'+
+      '</div></div>':'')+
+      '<div class="card"><div class="chart-container"><div class="card-header"><span class="dot"></span>异常 / 责任</div>'+
+        (KG.anomalyLog?'<b>'+KG.anomalyLog.length+'</b> 事件<br>':'')+
+        '<b>'+(vs.resp_count_total||0)+'</b> 责任<br>'+
+        '<b>'+(vs.resp_fired_mean||0)+'</b> 均值触发'+
+      '</div></div>'+
+    '</div>';
+}
+
+/* ══════════════════════════════════════
+   RSS RULES
+   ══════════════════════════════════════ */
+function renderRSS(){
+  var vs=KG.vizStats; if(!vs||!vs.rss_dist){document.getElementById('dash-content').innerHTML='<div class="msg-warn">无RSS数据</div>';return;}
+  var rd=vs.rss_dist;
+  var d=document.getElementById('dash-content');
+  var codes=Object.keys(rd.by_code||{}).sort(function(a,b){return (rd.by_code[b].count||0)-(rd.by_code[a].count||0);});
+  var layers=Object.keys(rd.by_layer||{}).sort();
+
+  /* by_layer pie */
+  var pw=200,ph=200,pr=80,pri=40,pcx=90,pcy=90;
+  var pieSvg='<svg width="180" height="180">';
+  var la=0;var layerTotal=0;layers.forEach(function(l){layerTotal+=rd.by_layer[l]||0;});
+  layers.forEach(function(l){
+    var cnt=rd.by_layer[l]||0;var pct=cnt/Math.max(layerTotal,1);
+    var a1=la,a2=la+pct*2*Math.PI;la+=pct*2*Math.PI;
+    var x1=pcx+pr*Math.cos(a1),y1=pcy+pr*Math.sin(a1);
+    var x2=pcx+pr*Math.cos(a2),y2=pcy+pr*Math.sin(a2);
+    var lg=a2-a1>Math.PI?1:0;
+    pieSvg+='<path d="M'+pcx+','+pcy+' L'+x1+','+y1+' A'+pr+','+pr+' 0 '+lg+' 1 '+x2+','+y2+' Z" fill="'+(RL_CC0[l]||'#6b7280')+'" stroke="#0f1117" stroke-width="1.5" style="cursor:pointer" onmouseover="tipShow(\'<b>'+l+'</b><br>'+cnt.toLocaleString()+' ('+pct.toFixed(1)+'%)\',event.clientX,event.clientY)" onmouseout="tipHide()"/>';
+  });
+  pieSvg+='<circle cx="'+pcx+'" cy="'+pcy+'" r="'+pri+'" fill="var(--card)"/>';
+  pieSvg+='<text x="'+pcx+'" y="'+(pcy+4)+'" text-anchor="middle" fill="#e0e0e0" font-size="10" font-weight="700">'+(layerTotal/1000).toFixed(1)+'k</text>';
+  pieSvg+='</svg>';
+
+  /* severity bins (from by_code sev_max) */
+  var sevBins=[];
+  codes.forEach(function(r){var info=rd.by_code[r];if(info)sevBins.push({code:r,max:info.sev_max||0,avg:info.sev_avg||0,count:info.count||0,fired:info.fired_total||0});});
+  var sevH=Math.max(sevBins.length*28+20,80);
+  var sevSvg='<svg width="500" height="'+sevH+'">';
+  var svMax=Math.max.apply(null,sevBins.map(function(s){return s.max;}))||1;
+  var svC2=Math.max.apply(null,sevBins.map(function(s){return s.count;}))||1;
+  sevBins.forEach(function(s,i){
+    var y2=i*28+14;
+    sevSvg+='<rect x="80" y="'+y2+'" width="'+(Math.max((s.max/svMax)*360,2))+'" height="4" fill="'+RC(s.code)+'" rx="1"/>';
+    sevSvg+='<text x="84" y="'+(y2+16)+'" fill="#8b8fa3" font-size="9">'+s.count.toLocaleString()+' '+s.code+'</text>';
+    sevSvg+='<text x="440" y="'+(y2+16)+'" fill="#8b8fa3" font-size="9">sev_max '+(s.max).toFixed(2)+' avg '+(s.avg).toFixed(2)+'</text>';
+  });
+  sevSvg+='</svg>';
+
+  /* fired_bins multi-line */
+  var fb=rd.fired_bins||{};
+  var fbcodes=Object.keys(fb);
+  var fbW=560,fbH=140;
+  var fbSvg='<svg width="'+fbW+'" height="'+fbH+'">';
+  if(fbcodes.length===0){fbSvg+='<text x="10" y="20" fill="#8b8fa3" font-size="11">无 fired_bins 时序数据</text>';}
+  fbSvg+='</svg>';
+  if(fbcodes.length>0){
+    var allBinN=new Set();fbcodes.forEach(function(c){Object.keys(fb[c]).forEach(function(b){allBinN.add(Number(b));});});
+    var mxBn=Math.max.apply(null,Array.from(allBinN))+1;mxBn=Math.max(mxBn,1);
+    var gMax=0;fbcodes.forEach(function(c){Object.values(fb[c]).forEach(function(v){gMax=Math.max(gMax,v);});});gMax=Math.max(gMax,1);
+    var fbSvg2='<svg width="'+fbW+'" height="'+fbH+'">';
+    /* grid */
+    for(var g=0;g<10;g++){var gx=g*fbW/10;fbSvg2+='<line x1="'+gx+'" y1="0" x2="'+gx+'" y2="'+(fbH-18)+'" stroke="#1e2130" stroke-width="0.5"/>';}
+    for(var g=0;g<4;g++){var gy=fbH-18-g*(fbH-18)/4;fbSvg2+='<line x1="0" y1="'+gy+'" x2="'+fbW+'" y2="'+gy+'" stroke="#1e2130" stroke-width="0.5"/>';}
+    /* axis */
+    fbSvg2+='<line x1="0" y1="'+(fbH-18)+'" x2="'+fbW+'" y2="'+(fbH-18)+'" stroke="#8b8fa3" stroke-width="1"/>';
+    fbSvg2+='<line x1="0" y1="0" x2="0" y2="'+(fbH-18)+'" stroke="#8b8fa3" stroke-width="1"/>';
+    /* each code line */
+    var lx=4;var drawn=0;
+    fbcodes.forEach(function(code){
+      if(drawn>8)return;var pts=[];pts.push('0,'+(fbH-18));
+      for(var bi=0;bi<=mxBn;bi++){var v=fb[code][String(bi)]||fb[code][bi]||0;var x3=(bi/mxBn)*fbW;var y3=fbH-18-(v/gMax)*(fbH-30);pts.push(x3+','+y3);}
+      fbSvg2+='<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+RC(code)+'" stroke-width="1.5" opacity="0.85"/>';
+      fbSvg2+='<rect x="'+lx+'" y="12" width="8" height="6" fill="'+RC(code)+'" rx="1"/>';
+      fbSvg2+='<text x="'+(lx+10)+'" y="17" fill="#8b8fa3" font-size="8">'+code+'</text>';
+      lx+=10+code.length*4+6;
+      drawn++;
+    });
+    fbSvg2+='</svg>';
+  }
+  /* resp_top bars */
+  var rt=rd.resp_top||{};var topResp=Object.keys(rt).sort(function(a,b){var va=typeof rt[a]==='object'?(rt[a].count||0):rt[a];var vb=typeof rt[b]==='object'?(rt[b].count||0):rt[b];return vb-va;}).slice(0,10);
+  var rtSvg='<svg width="400" height="'+Math.max(topResp.length*26+10,60)+'">';
+  var mxR=Math.max.apply(null,topResp.map(function(a){return typeof rt[a]==='object'?(rt[a].count||0):rt[a];}))||1;
+  topResp.forEach(function(id,i3){
+    var cnt=tp=typeof rt[id]==='object'?rt[id].count:rt[id];cnt=cnt||0;var y3=i3*26+14;var bw=Math.max((cnt/mxR)*340,2);
+    rtSvg+='<rect x="60" y="'+y3+'" width="'+bw+'" height="16" fill="var(--accent)" rx="2"/>';
+    rtSvg+='<text x="64" y="'+(y3+12)+'" fill="#e0e0e0" font-size="9">'+id+'</text>';
+    rtSvg+='<text x="'+(64+bw+4)+'" y="'+(y3+12)+'" fill="#8b8fa3" font-size="9">'+cnt.toLocaleString()+'</text>';
+  });
+  rtSvg+='</svg>';
+
+  d.innerHTML=
+    '<div style="margin-bottom:16px"><h2 style="font-size:16px;color:var(--accent)">RSS / TrafficLaw 规则概览</h2><p style="color:#8b8fa3;font-size:12px">共 '+codes.length+' 条规则 · '+(LayerTotal||0)+' 总违规</p></div>'+
+    '<div class="grid-2x2">'+
+      '<div class="card"><div class="chart-container"><div class="card-header"><span class="dot"></span>规则分层</div>'+pieSvg+'</div></div>'+
+      '<div class="card"><div class="chart-container"><div class="card-header"><span class="dot"></span>规则码分布 (by_code)</div>'+
+        codes.map(function(r){var info=rd.by_code[r];if(!info)return '';var desc=RD(r);var col=RC(r);
+          return '<div style="margin:4px 0;padding:6px;background:var(--bg);border-radius:4px;border-left:3px solid '+col+'">'+
+            '<div style="display:flex;align-items:center;gap:6px"><span class="node-badge" style="background:'+col+'">'+r+'</span><span style="color:#8b8fa3;font-size:10px">'+(info.layer||'?')+'</span></div>'+
+            '<div style="margin-top:2px;font-size:11px">'+desc+'</div>'+
+            '<div style="font-size:10px;color:#8b8fa3;margin-top:2px"> violating '+(info.count||0).toLocaleString()+' 触发 '+(info.fired_total||0).toLocaleString()+' sev_max '+(info.sev_max||0).toFixed(2)+'</div>'+
+          '</div>';
+        }).join('')+
+      '</div></div>'+
+      '<div class="card"><div class="chart-container"><div class="card-header"><span class="dot"></span>触发时序 (fired_bins)</div>'+fbSvg2+'</div></div>'+
+      '<div class="card"><div class="chart-container"><div class="card-header"><span class="dot"></span>责任方 Top10 + 严重度</div>'+rtSvg+'</div></div>'+
+    '</div>';
+}

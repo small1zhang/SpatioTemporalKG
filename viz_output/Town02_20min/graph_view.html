@@ -1,0 +1,1462 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title id="page-title">图谱视图 · STKG</title>
+<link rel="stylesheet" href="shared.css">
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+</head>
+<body>
+
+<!-- ═══ Top Tab Bar ═══════════════════════════════════════════ -->
+<div class="tab-bar">
+  <a class="active" onclick="switchTab('graph_view')">图谱视图</a>
+  <a onclick="switchTab('data_table')">数据表格</a>
+  <a onclick="switchTab('dashboard')">统计仪表盘</a>
+  <span class="town-badge">🌍 <span id="town-label">加载中...</span></span>
+</div>
+
+<!-- ═══ Control Bar (consolidated) ═════════════════════════════ -->
+<div class="control-bar">
+  <div class="dropdown" id="shard-dropdown">
+    <button onclick="toggleShardDropdown()" id="shard-btn">选择分片 ▼</button>
+    <div class="dropdown-content" id="shard-list" style="display:none"></div>
+  </div>
+  <span class="sep"></span>
+  <label style="gap:3px">帧</label>
+  <div class="slider-wrapper" id="slider-wrapper" style="position:relative;flex:1;height:24px;display:flex;align-items:center">
+    <input type="range" id="frame-slider" min="0" max="1999" step="1" value="0" oninput="onFrameChange()" style="width:100%">
+  </div>
+  <div class="frame-display" id="frame-display">Frame 0</div>
+  <button class="sm" onclick="shiftFrame(-100)" title="前100帧">⏮100</button>
+  <button class="sm" onclick="shiftFrame(100)" title="后100帧">⏭100</button>
+  <button class="sm" onclick="nextAnomaly()" title="跳到下一异常">⚠ Next Anom</button>
+  <span class="sep"></span>
+  <span id="info" style="color:var(--text2);font-size:12px">节点: -- 边: --</span>
+  <span class="sep"></span>
+  <button class="sm" id="btn-ego" onclick="toggleEGO()" class="active">🎯 EGO</button>
+  <button class="sm" id="btn-2hop" onclick="toggle2hop()">2跳</button>
+  <button class="sm" id="btn-env" onclick="toggleEnv()">🌤 环境</button>
+  <button class="sm" id="btn-labels" onclick="toggleLabels()">🏷 标签</button>
+  <button class="sm" id="btn-anom" onclick="toggleAnomHighlight()" style="color:var(--red)">🔴 异常高亮</button>
+  <button class="sm" id="btn-trail" onclick="toggleEgoTrail()" style="color:var(--orange)">🟠 EGO轨迹</button>
+  <span class="sep"></span>
+  <label>布局</label>
+  <select id="layout-sel" onchange="switchLayout()">
+    <option value="force">Force</option>
+    <option value="circular">Circular</option>
+    <option value="radial">Radial</option>
+  </select>
+  <span class="sep"></span>
+  <button class="sm primary" id="btn-play" onclick="togglePlay()">▶ 播放</button>
+  <label>@<input type="number" id="play-speed" value="10" min="1" max="60" style="width:36px;text-align:center">fps</label>
+  <span class="sep"></span>
+  <button class="sm" onclick="saveScreenshot()">📷 截图</button>
+  <button class="sm" onclick="resetView()">↺ 重置</button>
+  <label>sev ≥ <input type="range" id="sev-slider" min="0" max="100" value="0" oninput="onSevChange()" style="width:70px"></label>
+  <span id="sev-val" style="font-size:10px;color:var(--text2);min-width:30px">0.0</span>
+</div>
+
+<!-- ═══ Frame Row ══════════════════════════════════════════════ -->
+<div class="frame-row">
+  <span style="font-size:12px;color:var(--text)">🎞️ 帧</span>
+  <div class="slider-wrapper" id="slider-wrapper2" style="position:relative;flex:1;height:24px;display:flex;align-items:center">
+    <input type="range" id="frame-slider2" min="0" max="1999" step="1" value="0" oninput="onFrameChange()" style="width:100%">
+  </div>
+  <div class="frame-display" id="frame-display2">Frame 0</div>
+  <span class="frame-stat" id="frame-stat">0%</span>
+  <span id="anom-this-frame" style="color:var(--red);font-size:11px;font-weight:600;min-width:80px"></span>
+</div>
+
+<!-- ═══ Main Layout ════════════════════════════════════════════ -->
+<div class="main">
+  <!-- Graph Area -->
+  <div class="graph-area" id="graph-area">
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      加载数据中...
+    </div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar" id="sidebar">
+
+    <!-- 1. EGO Info -->
+    <h4>📋 EGO 自车信息</h4>
+    <div id="ego-info" style="color:var(--text2)">--</div>
+
+    <!-- 2. Anomaly Events -->
+    <h4>⚠️ 异常事件 <span class="badge" id="anom-this-frame-badge"></span></h4>
+    <div id="anomaly-panel" style="color:var(--text2);font-size:11px">加载中...</div>
+
+    <!-- 3. Filters -->
+    <h4>🎯 过滤器 <span style="font-size:10px;color:var(--text2)"><button class="sm" onclick="selectAllFilters()">全选</button> <button class="sm" onclick="clearAllFilters()">清除</button></span></h4>
+    <div style="margin:4px 0">
+      <label style="font-size:11px;color:var(--text2)">Severity ≥ <span id="sidebar-sev-val">0.0</span></label>
+      <input type="range" id="sev-sidebar" min="0" max="100" value="0" oninput="onSidebarSevChange()" style="width:100%;margin-top:4px">
+    </div>
+    <label style="font-size:11px;color:var(--text2);margin-top:4px;display:block">节点类型</label>
+    <div class="filter-list" id="type-filter-list" style="max-height:140px"><div style="color:var(--text2)">加载后显示...</div></div>
+    <label style="font-size:11px;color:var(--text2);margin-top:6px;display:block">关系类型</label>
+    <div class="filter-list" id="edge-type-filter-list" style="max-height:140px"><div style="color:var(--text2)">加载后显示...</div></div>
+    <label style="font-size:11px;color:var(--text2);margin-top:6px;display:block">交互类型</label>
+    <div class="filter-list" id="ie-filter-list" style="max-height:120px"><div style="color:var(--text2)">加载后显示...</div></div>
+
+    <!-- 4. Search -->
+    <h4>🔍 搜索节点</h4>
+    <div class="search-box">
+      <input type="text" id="search-input" placeholder="输入ID或entity_id..." style="flex:1" onkeyup="if(event.key==='Enter')searchNode()">
+      <button onclick="searchNode()">🔍</button>
+    </div>
+    <div id="search-results" style="color:var(--text2);font-size:11px;max-height:120px;overflow-y:auto"></div>
+
+    <!-- 5. Environment -->
+    <h4>🌤️ 环境/天气</h4>
+    <div id="env-panel" style="color:var(--text2);font-size:11px">--</div>
+
+    <!-- 6. Mini-map -->
+    <h4>🗺️ Mini-map</h4>
+    <div class="minimap" id="minimap"><canvas id="minimap-canvas"></canvas></div>
+
+    <!-- EGO Edges -->
+    <h4>🔗 EGO 关联边（前 8 条）</h4>
+    <div id="ego-edges" style="color:var(--text2)">--</div>
+
+    <!-- Legend -->
+    <h4>🎨 图例</h4>
+    <div id="legend"></div>
+
+    <!-- KG Rule Stats -->
+    <h4>⚖️ KG 规则统计</h4>
+    <div id="rule-panel" style="color:var(--text2);font-size:11px">--</div>
+
+    <!-- Trend -->
+    <h4>📈 动态趋势</h4>
+    <div id="trend-panel" style="color:var(--text2);font-size:11px">--</div>
+
+    <!-- Anomaly Timeline -->
+    <h4>⚠️ 异常时间分布</h4>
+    <div id="anom-timeline-panel" style="color:var(--text2);font-size:11px">--</div>
+
+    <!-- IE Panel -->
+    <h4>🔗 交互类型</h4>
+    <div id="ie-panel" style="color:var(--text2);font-size:11px">--</div>
+
+    <!-- Vehicle Lifetimes -->
+    <h4>🚗 车辆活跃时长</h4>
+    <div id="vehicle-lifetime-panel" style="color:var(--text2);font-size:11px;max-height:180px;overflow-y:auto">--</div>
+
+    <!-- Responsibility -->
+    <h4>⚖️ 责任归属</h4>
+    <div id="resp-panel" style="color:var(--text2);font-size:11px">--</div>
+
+    <!-- RSS Full Overview -->
+    <h4>🛡️ RSS 规则分布</h4>
+    <div id="rss-overview-panel" style="color:var(--text2);font-size:11px;max-height:260px;overflow-y:auto;padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg2)">--</div>
+
+    <!-- RSS Timeline -->
+    <h4>🛡️ RSS 触发时序</h4>
+    <div id="rss-timeline-panel" style="color:var(--text2);font-size:11px">--</div>
+
+    <!-- RSS Response Top -->
+    <h4>🛡️ 责任方 Top10</h4>
+    <div id="rss-resp-top-panel" style="color:var(--text2);font-size:11px;max-height:200px;overflow-y:auto">--</div>
+
+    <!-- RSS Frame Snapshot -->
+    <h4>🛡️ 当前帧违规快照</h4>
+    <div id="rss-frame-panel" style="color:var(--text2);font-size:11px;max-height:240px;overflow-y:auto;padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg2)">滚动帧查看</div>
+  </div>
+</div>
+
+<!-- ═══ Detail Modal (hidden) ══════════════════════════════════ -->
+<div id="detail-modal" class="modal-overlay" style="display:none">
+  <div class="modal-box" id="detail-modal-box"></div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   graph_view.html — Enhanced D3 Force-Directed Graph
+   ═══════════════════════════════════════════════════════════════════ */
+
+// Tab switching — use relative paths so it works from any town dir
+function switchTab(tab) {
+  const mapping = {
+    graph_view: 'graph_view.html',
+    data_table: 'data_table.html',
+    dashboard: 'dashboard.html'
+  };
+  if (mapping[tab]) {
+    window.location.href = mapping[tab];
+  }
+}
+
+// Toggle shard dropdown
+function toggleShardDropdown() {
+  const el = document.getElementById('shard-list');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+function toggleShardCheck(cb, idx) {
+  if (cb.checked) KG.shardSet.add(idx); else KG.shardSet.delete(idx);
+  updateShardBtn(); KG.loadMultiShard();
+}
+function updateShardBtn() {
+  const set = KG.shardSet;
+  const ids = [...set].sort((a, b) => a - b);
+  if (ids.length === 0) { set.add(1); return updateShardBtn(); }
+  document.getElementById('shard-btn').textContent =
+    `分片 ${ids.length}个 ▼`;
+  KG.loadMultiShard();
+}
+
+// Frame navigation
+function shiftFrame(delta) {
+  const slider = document.getElementById('frame-slider');
+  let v = parseInt(slider.value) + delta;
+  v = Math.max(parseInt(slider.min), Math.min(parseInt(slider.max), v));
+  slider.value = v;
+  onFrameChange();
+}
+function nextAnomaly() {
+  if (!KG.anomalyLog || !KG.anomalyLog.length) return;
+  const cur = KG.currentFrame || 0;
+  const next = KG.anomalyLog.find(a => a.frame_id > cur + 50);
+  if (!next) {
+    // wrap around
+    const nx = KG.anomalyLog.find(a => a.frame_id >= cur);
+    if (!nx) return;
+    jumpToFrame(nx.frame_id);
+  } else {
+    jumpToFrame(next.frame_id);
+  }
+}
+function jumpToFrame(f) {
+  const slider = document.getElementById('frame-slider');
+  slider.value = f;
+  onFrameChange();
+}
+function onFrameChange() {
+  let f = parseInt(document.getElementById('frame-slider').value);
+  KG.currentFrame = f;
+  document.getElementById('frame-display').textContent = `Frame ${f}`;
+  KG.renderFrame();
+}
+
+// Play
+let playTimer = null;
+function togglePlay() {
+  if (playTimer) {
+    clearInterval(playTimer); playTimer = null;
+    document.getElementById('btn-play').textContent = '▶ 播放';
+    document.getElementById('btn-play').className = 'sm primary';
+    return;
+  }
+  document.getElementById('btn-play').textContent = '⏸ 暂停';
+  document.getElementById('btn-play').className = 'sm danger';
+  const speed = parseInt(document.getElementById('play-speed').value) || 10;
+  playTimer = setInterval(() => {
+    const slider = document.getElementById('frame-slider');
+    let v = parseInt(slider.value) + 1;
+    const max = parseInt(slider.max);
+    if (v > max) v = parseInt(slider.min);
+    slider.value = v; onFrameChange();
+  }, Math.max(30, Math.round(1000 / speed)));
+}
+
+// Toggle switches state tracking
+const viewState = {
+  egoOnly: true, show2hop: false, showEnv: false,
+  showLabels: true, anomHighlight: false, egoTrail: false,
+  severity: 0.0, layout: 'force'
+};
+function toggleEGO() {
+  viewState.egoOnly = !viewState.egoOnly;
+  document.getElementById('btn-ego').style.fontWeight = viewState.egoOnly ? '700' : '400';
+  KG.renderFrame();
+}
+function toggle2hop() {
+  viewState.show2hop = !viewState.show2hop;
+  document.getElementById('btn-2hop').style.fontWeight = viewState.show2hop ? '700' : '400';
+  KG.renderFrame();
+}
+function toggleEnv() {
+  viewState.showEnv = !viewState.showEnv;
+  document.getElementById('btn-env').style.fontWeight = viewState.showEnv ? '700' : '400';
+  KG.renderFrame();
+}
+function toggleLabels() {
+  viewState.showLabels = !viewState.showLabels;
+  document.getElementById('btn-labels').style.fontWeight = viewState.showLabels ? '700' : '400';
+  KG.renderFrame();
+}
+function toggleAnomHighlight() {
+  viewState.anomHighlight = !viewState.anomHighlight;
+  document.getElementById('btn-anom').style.fontWeight = viewState.anomHighlight ? '700' : '400';
+  KG.renderFrame();
+}
+function toggleEgoTrail() {
+  viewState.egoTrail = !viewState.egoTrail;
+  document.getElementById('btn-trail').style.fontWeight = viewState.egoTrail ? '700' : '400';
+  KG.renderFrame();
+}
+function onSevChange() {
+  const v = parseInt(document.getElementById('sev-slider').value) / 100;
+  viewState.severity = v;
+  document.getElementById('sev-val').textContent = v.toFixed(1);
+  document.getElementById('sidebar-sev-val').textContent = v.toFixed(1);
+  document.getElementById('sev-sidebar').value = parseInt(document.getElementById('sev-slider').value);
+  KG.renderFrame();
+}
+function onSidebarSevChange() {
+  const v = parseInt(document.getElementById('sev-sidebar').value) / 100;
+  viewState.severity = v;
+  document.getElementById('sev-val').textContent = v.toFixed(1);
+  document.getElementById('sidebar-sev-val').textContent = v.toFixed(1);
+  document.getElementById('sev-slider').value = parseInt(document.getElementById('sev-sidebar').value);
+  KG.renderFrame();
+}
+function switchLayout() {
+  viewState.layout = document.getElementById('layout-sel').value;
+  KG.renderFrame();
+}
+function selectAllFilters() {
+  // select all checkboxes in type-filter-list and edge-type-filter-list
+  document.querySelectorAll('#type-filter-list input[type=checkbox]').forEach(cb => {
+    cb.checked = true; KG.typeFilter.add(cb.dataset.type);
+  });
+  document.querySelectorAll('#edge-type-filter-list input[type=checkbox]').forEach(cb => {
+    cb.checked = true; KG.edgeTypeFilter.add(cb.dataset.etype);
+  });
+  KG.renderFrame();
+}
+function clearAllFilters() {
+  KG.typeFilter.clear(); KG.edgeTypeFilter.clear();
+  document.querySelectorAll('#type-filter-list input[type=checkbox]').forEach(cb => { cb.checked = false; });
+  document.querySelectorAll('#edge-type-filter-list input[type=checkbox]').forEach(cb => { cb.checked = false; });
+  KG.renderFrame();
+}
+function resetView() { KG.renderFrame(); }
+function saveScreenshot() {
+  const svg = document.querySelector('#graph-area svg');
+  if (!svg) return;
+  const s = new XMLSerializer().serializeToString(svg);
+  const img = new Blob([s], { type: 'image/svg+xml' });
+  const c = document.createElement('canvas');
+  c.width = svg.clientWidth || 900;
+  c.height = svg.clientHeight || 550;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#0f1117';
+  ctx.fillRect(0, 0, c.width, c.height);
+  const u = URL.createObjectURL(img);
+  const i = new Image();
+  i.onload = () => {
+    ctx.drawImage(i, 0, 0, c.width, c.height);
+    URL.revokeObjectURL(u);
+    const a = document.createElement('a');
+    a.href = c.toDataURL('image/png');
+    a.download = `frame_${KG.currentFrame}.png`;
+    a.click();
+  };
+  i.src = u;
+}
+
+// Search
+function searchNode(ev) {
+  if (ev && ev.key !== 'Enter') return;
+  const q = document.getElementById('search-input').value.trim().toLowerCase();
+  if (!q) { document.getElementById('search-results').innerHTML = ''; return; }
+  const res = [];
+  for (const [idx, shard] of Object.entries(KG.shards)) {
+    for (const n of (shard.nodes || [])) {
+      if (n.id.toLowerCase().includes(q) || (n.attrs || {}).entity_id?.toLowerCase().includes(q)) {
+        res.push({ ...n, _shardIdx: parseInt(idx) });
+        if (res.length >= 20) break;
+      }
+    }
+    if (res.length >= 20) break;
+  }
+  document.getElementById('search-results').innerHTML = res.map(n => {
+    const c = (typeof TYPE_COLORS !== 'undefined' ? TYPE_COLORS : {})[n.type] || '#6b7280';
+    return `<div style="padding:2px 0;cursor:pointer" onmouseover="this.style.color='var(--accent2)'" onmouseout="this.style.color=''" onclick="focusNode('${n.id}','${n._shardIdx}')"><span class="node-badge" style="background:${c};font-size:9px">${n.type}</span> ${n.id}</div>`;
+  }).join('') || '<span style="color:var(--text2)">未找到</span>';
+}
+function focusNode(id, shardIdx) {
+  if (KG.typeFilter.size > 0) {
+    const n = KG.getNodeById(id);
+    KG.typeFilter.clear();
+    if (n) KG.typeFilter.add(n.type);
+  }
+  KG.currentShardIdx = parseInt(shardIdx);
+  const si = KG.summary?.shards?.find(s => s.shard_idx === parseInt(shardIdx));
+  if (si) {
+    const slider = document.getElementById('frame-slider');
+    slider.min = si.frame_start; slider.max = si.frame_end;
+  }
+  // Find the node and show its frame
+  const n = KG.getNodeById(id);
+  if (n && n.first_frame !== undefined) {
+    const slider = document.getElementById('frame-slider');
+    slider.value = n.first_frame;
+    KG.currentFrame = n.first_frame;
+  }
+  KG.renderFrame();
+  // Also show detail in ego-info area
+  const shard = KG.shards[parseInt(shardIdx)];
+  if (shard) {
+    const nn = shard.nodes.find(x => x.id === id);
+    if (nn) showNodeDetail(nn, shard.edges.filter(e => e.src_id === id || e.dst_id === id));
+  }
+}
+
+// ── Node Detail Panel ──────────────────────────────────────────────
+function showNodeDetail(n, edges) {
+  const a = n.attrs || {};
+  let html = `<div style="margin-bottom:6px"><span class="node-badge" style="background:${(typeof TYPE_COLORS !== 'undefined' ? TYPE_COLORS : {})[n.type] || '#6b7280'}">${n.type}</span></div>`;
+  html += `<div class="prop"><span class="k">ID</span><span class="v">${n.id}</span></div>`;
+  html += `<div class="prop"><span class="k">帧范围</span><span class="v">${n.first_frame}~${n.last_frame}</span></div>`;
+  const skip = new Set(['entity_id', 'entity_type', 'first_frame', 'last_frame', 'fired_frames']);
+  for (const [k, v] of Object.entries(a)) {
+    if (skip.has(k) || v === null || v === undefined) continue;
+    let vs = typeof v === 'number' ? (v.toFixed?.call(v, 2) ?? v) : String(v);
+    if (vs.length > 40) vs = vs.slice(0, 40) + '...';
+    html += `<div class="prop"><span class="k">${k}</span><span class="v" title="${String(v)}">${vs}</span></div>`;
+  }
+  const conn = edges.filter(e => e.src_id === n.id || e.dst_id === n.id);
+  const grouped = {};
+  conn.forEach(e => { if (!grouped[e.type]) grouped[e.type] = []; grouped[e.type].push(e); });
+
+  document.getElementById('ego-info').innerHTML = html;
+  const edgeH = Object.entries(grouped).map(([t, es]) => {
+    const c = (typeof EDGE_COLORS !== 'undefined' ? EDGE_COLORS : {})[t] || '#4b5563';
+    return es.slice(0, 8).map(e => {
+      const o = e.src_id === n.id ? e.dst_id : e.src_id;
+      const d = e.src_id === n.id ? '→' : '←';
+      return `<div class="edge-item"><span class="edge-type-badge" style="background:${c}">${t}</span>${d} <b>${o}</b></div>`;
+    }).join('') + (es.length > 8 ? `<div style="color:var(--text2);font-size:11px">...还有 ${es.length - 8} 条</div>` : '');
+  }).join('');
+  document.getElementById('ego-edges').innerHTML = edgeH || '<div style="color:var(--text2)">无关联边</div>';
+}
+
+// ── Filter update functions ─────────────────────────────────────────
+function toggleType(cb) {
+  if (cb.checked) KG.typeFilter.add(cb.dataset.type); else KG.typeFilter.delete(cb.dataset.type);
+  KG.renderFrame();
+}
+function toggleEdgeType(cb) {
+  if (cb.checked) KG.edgeTypeFilter.add(cb.dataset.etype); else KG.edgeTypeFilter.delete(cb.dataset.etype);
+  KG.renderFrame();
+}
+function toggleIEType(cb) {
+  if (cb.checked) KG.ieFilter.add(cb.dataset.ie); else KG.ieFilter.delete(cb.dataset.ie);
+  KG.renderFrame();
+}
+
+function updateTypeFilter(visNodes) {
+  const types = [...new Set(visNodes.map(n => n.type))].sort();
+  const list = document.getElementById('type-filter-list');
+  if (types.length === 0) { list.innerHTML = '<div style="color:var(--text2)">无可见节点</div>'; return; }
+  if (KG.typeFilter.size === 0) types.forEach(t => KG.typeFilter.add(t));
+  list.innerHTML = types.map(t => {
+    const cnt = visNodes.filter(n => n.type === t).length;
+    const c = (typeof TYPE_COLORS !== 'undefined' ? TYPE_COLORS : {})[t] || '#6b7280';
+    const ch = KG.typeFilter.has(t) ? 'checked' : '';
+    return `<label><input type="checkbox" ${ch} data-type="${t}" onchange="toggleType(this)"><span class="dot" style="background:${c}"></span>${t} <span style="color:var(--text2)">(${cnt})</span></label>`;
+  }).join('');
+}
+function updateEdgeTypeFilter(visEdges) {
+  const list = document.getElementById('edge-type-filter-list');
+  const types = [...new Set(visEdges.map(e => e.type))].sort();
+  if (types.length === 0) { list.innerHTML = '<div style="color:var(--text2)">无可见边</div>'; return; }
+  if (KG.edgeTypeFilter.size === 0) types.forEach(t => KG.edgeTypeFilter.add(t));
+  list.innerHTML = types.map(t => {
+    const cnt = visEdges.filter(e => e.type === t).length;
+    const c = (typeof EDGE_COLORS !== 'undefined' ? EDGE_COLORS : {})[t] || '#4b5563';
+    const ch = KG.edgeTypeFilter.has(t) ? 'checked' : '';
+    return `<label><input type="checkbox" ${ch} data-etype="${t}" onchange="toggleEdgeType(this)"><span class="swatch" style="background:${c}"></span>${t} <span style="color:var(--text2)">(${cnt})</span></label>`;
+  }).join('');
+}
+function updateIEFilter(visEdges) {
+  const list = document.getElementById('ie-filter-list');
+  const types = [...new Set(visEdges.filter(e => KG.vizStats?.ie_dist?.[e.type]).map(e => e.type))].sort();
+  if (types.length === 0) { list.innerHTML = '<div style="color:var(--text2)">无交互类型数据</div>'; return; }
+  if (KG.ieFilter.size === 0) types.forEach(t => KG.ieFilter.add(t));
+  list.innerHTML = types.map(t => {
+    const cnt = visEdges.filter(e => e.type === t).length;
+    const colors = ['#3b82f6','#8b5cf6','#eab308','#ef4444','#f97316','#ec4899','#22c55e','#6b7280','#06b6d4','#a78bfa'];
+    const ci = types.indexOf(t);
+    const ch = KG.ieFilter.has(t) ? 'checked' : '';
+    return `<label><input type="checkbox" ${ch} data-ie="${t}" onchange="toggleIEType(this)"><span class="dot" style="background:${colors[ci % colors.length]};width:8px;height:8px"></span>${t} <span style="color:var(--text2)">(${cnt})</span></label>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// D3 Render Logic
+// ══════════════════════════════════════════════════════════════════
+function drawD3(nodes, edges, egoId) {
+  const container = document.getElementById('graph-area');
+  container.querySelector('svg')?.remove();
+  const W = container.clientWidth || 900;
+  const H = container.clientHeight || 550;
+
+  const svg = d3.select(container).append('svg').attr('width', W).attr('height', H).attr('id', 'graph-svg');
+  const g = svg.append('g');
+  svg.call(d3.zoom().scaleExtent([0.1, 30]).on('zoom', e => g.attr('transform', e.transform)));
+
+  // Grid background
+  const gg = g.append('g');
+  for (let x = -W; x < W * 2; x += 80)
+    gg.append('line').attr('x1', x).attr('y1', -H).attr('x2', x).attr('y2', H * 2).attr('stroke', '#1a1d27').attr('stroke-width', .5);
+  for (let y = -H; y < H * 2; y += 80)
+    gg.append('line').attr('x1', -W).attr('y1', y).attr('x2', W * 2).attr('y2', y).attr('stroke', '#1a1d27').attr('stroke-width', .5);
+
+  // EGO Trail group (polyline layer)
+  const trailGroup = g.append('g').attr('class', 'ego-trail');
+
+  // Anomaly highlight group
+  const anomGroup = g.append('g').attr('class', 'anom-highlight');
+
+  // Initialize sim nodes with positions
+  const simNodes = nodes.map(n => {
+    const prev = n._pos || {};
+    return {
+      ...n,
+      x: prev.x ?? (n.attrs?.location_x != null ? (n.attrs.location_x * 2.5 + W / 2) : Math.random() * W),
+      y: prev.y ?? (n.attrs?.location_y != null ? (-(n.attrs.location_y * 2.5) + H / 2) : Math.random() * H)
+    };
+  });
+  const nodeMap = {};
+  simNodes.forEach(n => nodeMap[n.id] = n);
+
+  const simEdges = edges.filter(e => nodeMap[e.src_id] && nodeMap[e.dst_id]).map(e => ({
+    ...e, source: e.src_id, target: e.dst_id
+  }));
+
+  // Edge markers
+  const defs = svg.append('defs');
+  const edgeTypes = new Set(simEdges.map(e => e.type));
+  for (const t of edgeTypes) {
+    const c = (typeof EDGE_COLORS !== 'undefined' ? EDGE_COLORS : {})[t] || '#4b5563';
+    defs.append('marker').attr('id', 'a-' + t).attr('viewBox', '0 -4 8 8').attr('refX', 22).attr('refY', 0)
+      .attr('markerWidth', 4).attr('markerHeight', 4).attr('orient', 'auto')
+      .append('path').attr('d', 'M0,-3L8,0L0,3').attr('fill', c);
+  }
+
+  // Anomaly node IDs
+  const anomAnomalies = KG.getAnomaliesInFrame(KG.currentFrame || 0);
+  const anomNodeIds = new Set();
+  const anomEdgeIds = new Set();
+  if (anomAnomalies.length && (typeof ANOM_COLORS !== 'undefined')) {
+    const shard = KG.shards[KG.currentShardIdx];
+    if (shard) {
+      for (const anom of anomAnomalies) {
+        // Find SafetyViolation and ResponsibilityAssignment nodes linked to this anomaly
+        const targetId = anom.target_actor_id;
+        for (const n of shard.nodes) {
+          if (n.type === 'SafetyViolation' && (n.attrs?.src_id === targetId || n.attrs?.dst_id === targetId)) {
+            anomNodeIds.add(n.id);
+            // Also find connected responsibility assignments
+            for (const e of shard.edges) {
+              if (e.dst_id === n.id || e.src_id === n.id) anomEdgeIds.add(e.type);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Draw edges
+  const link = g.append('g').selectAll('line').data(simEdges).join('line')
+    .attr('stroke', d => (typeof EDGE_COLORS !== 'undefined' ? EDGE_COLORS : {})[d.type] || '#4b5563')
+    .attr('stroke-width', 1.2)
+    .attr('stroke-opacity', .4)
+    .attr('marker-end', d => 'url(#a-' + d.type + ')');
+
+  // Edge labels
+  const showLabels = viewState.showLabels;
+  const edgeLabelG = g.append('g');
+  const edgeLabelEl = edgeLabelG.selectAll('text').data(simEdges).join('text')
+    .attr('font-size', 6).attr('fill', d => (typeof EDGE_COLORS !== 'undefined' ? EDGE_COLORS : {})[d.type] || '#4b5563')
+    .attr('text-anchor', 'middle').attr('dy', -3).attr('opacity', showLabels ? .6 : 0)
+    .text(d => d.type);
+
+  // Draw nodes
+  const node = g.append('g').selectAll('g').data(simNodes).join('g');
+  node.append('circle')
+    .attr('r', d => {
+      if (d.id === egoId) return 14;
+      switch (d.type) {
+        case 'Vehicle': return 8;
+        case 'TrafficLight': return 6;
+        case 'RoadElement': return 4;
+        case 'Junction': return 5;
+        case 'Maneuver': return 7;
+        case 'Pedestrian': return 5;
+        case 'SafetyViolation': return 7;
+        case 'ResponsibilityAssignment': return 7;
+        default: return 4;
+      }
+    })
+    .attr('fill', d => {
+      if (d.id === egoId) return 'var(--ego)';
+      return (typeof TYPE_COLORS !== 'undefined' ? TYPE_COLORS : {})[d.type] || '#6b7280';
+    })
+    .attr('stroke', d => d.id === egoId ? '#fff' : '#0f1117')
+    .attr('stroke-width', d => d.id === egoId ? 3 : 1.5)
+    .attr('class', d => {
+      const cls = ['stkg-node'];
+      if (anomNodeIds.has(d.id)) cls.push('anom-active-circle');
+      return cls.join(' ');
+    })
+    .style('cursor', 'pointer')
+    .on('click', function (e, d) { e.stopPropagation(); showNodeDetail(d, simEdges); })
+    .on('mouseover', function (e, d) {
+      d3.select(this).transition().duration(150)
+        .attr('r', d.id === egoId ? 18 : (d.type === 'Vehicle' ? 12 : 9));
+      link.attr('stroke-opacity', l => (l.src_id === d.id || l.dst_id === d.id) ? .9 : .07);
+      link.attr('stroke-width', l => (l.src_id === d.id || l.dst_id === d.id) ? 2.5 : .3);
+      edgeLabelEl.attr('opacity', l => (l.src_id === d.id || l.dst_id === d.id) ? .8 : 0);
+      node.attr('opacity', n2 => {
+        if (n2.id === d.id) return 1;
+        if (simEdges.some(e => (e.src_id === d.id && e.dst_id === n2.id) || (e.dst_id === d.id && e.src_id === n2.id))) return 1;
+        return .1;
+      });
+    })
+    .on('mouseout', function () {
+      link.attr('stroke-opacity', .4).attr('stroke-width', 1.2);
+      edgeLabelEl.attr('opacity', showLabels ? .6 : 0);
+      node.attr('opacity', 1);
+    });
+
+  // Node labels
+  node.append('text')
+    .attr('dy', d => -(d.id === egoId ? 17 : (d.type === 'Vehicle' ? 11 : 8)))
+    .attr('text-anchor', 'middle').attr('font-size', d => d.id === egoId ? 10 : 7)
+    .attr('font-weight', 600).attr('fill', '#e0e0e0')
+    .attr('paint-order', 'stroke').attr('stroke', '#0f1117').attr('stroke-width', 2.5)
+    .text(d => {
+      if (d.id === egoId) return '🚗 EGO';
+      if (d.type === 'Vehicle') return '🚗' + (d.attrs?.vehicle_type || '').split('.').pop().slice(0, 8);
+      if (d.type === 'Pedestrian') return '🚶' + d.id;
+      if (d.type === 'TrafficLight') return '🚦' + (d.attrs?.state || '').replace('TrafficLightState.', '').slice(0, 3);
+      if (d.type === 'RoadElement') return 'L' + (d.attrs?.lane_id || '');
+      if (d.type === 'Maneuver') return '🎯' + (d.attrs?.labels || []).join(',').slice(0, 10);
+      if (d.type === 'SafetyViolation') return '⚠' + (d.attrs?.rule_code || '').slice(0, 8);
+      if (d.type === 'Junction') return '🚧J';
+      if (d.type === 'InteractionEvent') return '⚡';
+      if (d.type === 'ResponsibilityAssignment') return '⚖';
+      if (d.type === 'EnvironmentSnapshot') return '🌤️';
+      return d.type.slice(0, 5);
+    });
+
+  // ── Force Simulation ────────────────────────────────────────────
+  const LINK_DIST_EGO = 90, LINK_DIST = 55;
+  const CHARGE_EGO = -400, CHARGE = -50;
+
+  let sim;
+  if (viewState.layout === 'force') {
+    sim = d3.forceSimulation(simNodes)
+      .force('link', d3.forceLink(simEdges).id(d => d.id).distance(d =>
+        (d.source === egoId || d.target === egoId) ? LINK_DIST_EGO : LINK_DIST
+      ).strength(d => (d.source === egoId || d.target === egoId) ? .5 : .1))
+      .force('charge', d3.forceManyBody().strength(d => d.id === egoId ? CHARGE_EGO : CHARGE))
+      .force('center', d3.forceCenter(W / 2, H / 2))
+      .force('collision', d3.forceCollide(d => d.id === egoId ? 22 : 7))
+      .force('x', d3.forceX(W / 2).strength(.03))
+      .force('y', d3.forceY(H / 2).strength(.03));
+  } else if (viewState.layout === 'radial') {
+    // Radial: EGO at center, others by angle
+    const otherNodes = simNodes.filter(n => n.id !== egoId);
+    const nOthers = otherNodes.length;
+    const r0 = Math.min(W, H) * 0.35;
+    otherNodes.forEach((n, i) => {
+      const angle = (2 * Math.PI * i) / Math.max(nOthers, 1);
+      n.x = W / 2 + r0 * Math.cos(angle);
+      n.y = H / 2 + r0 * Math.sin(angle);
+    });
+    const egoNode = simNodes.find(n => n.id === egoId);
+    if (egoNode) { egoNode.x = W / 2; egoNode.y = H / 2; }
+    sim = d3.forceSimulation(simNodes)
+      .force('link', d3.forceLink(simEdges).id(d => d.id).distance(45))
+      .force('center', d3.forceCenter(W / 2, H / 2))
+      .force('collision', d3.forceCollide(d => d.id === egoId ? 22 : 7));
+  } else {
+    // Circular: arrange by node type groups
+    const types = [...new Set(simNodes.map(n => n.type))];
+    const cx = W / 2, cy = H / 2;
+    const r0 = Math.min(W, H) * 0.3;
+    simNodes.forEach((n, i) => {
+      const ti = types.indexOf(n.type);
+      const angle = (2 * Math.PI * ti) / types.length + (i * 0.02);
+      const rr = r0 * (0.6 + 0.4 * Math.random());
+      n.x = cx + rr * Math.cos(angle);
+      n.y = cy + rr * Math.sin(angle);
+    });
+    sim = d3.forceSimulation(simNodes)
+      .force('link', d3.forceLink(simEdges).id(d => d.id).distance(50))
+      .force('center', d3.forceCenter(cx, cy))
+      .force('collision', d3.forceCollide(d => d.id === egoId ? 22 : 7));
+  }
+
+  // EGO Trail: build polyline from ego position history
+  function buildEgoTrail() {
+    const egoN = KG.getNodeById(egoId);
+    if (!egoN || !viewState.egoTrail) return;
+    const currentFrame = KG.currentFrame || 0;
+    const egoShard = KG.shards[KG.currentShardIdx];
+    if (!egoShard) return;
+
+    // Collect positions: use ego node attrs positions from each shard
+    const positions = [];
+    const rng = 200; // show last 200 frames around current
+    const fStart = Math.max(0, currentFrame - rng);
+    const fEnd = currentFrame;
+
+    // Simple trail: just use ego node's location_x/Y at current, interpolated from first_frame data
+    const egoNodes = KG.allNodes.filter(n => n.id === egoId);
+    if (egoNodes.length === 0) return;
+
+    // Use the specific ego node for this frame range
+    const activeEgo = egoNodes.find(n => n.id === egoId) || egoNodes[0];
+    const ex = activeEgo.attrs?.location_x, ey = activeEgo.attrs?.location_y;
+    if (ex == null || ey == null) return;
+
+    // Interpolate positions for the trail
+    const { frameStart, frameEnd } = (() => {
+      const si = KG.summary?.shards?.find(s => s.shard_idx === KG.currentShardIdx);
+      return si ? { frameStart: si.frame_start, frameEnd: si.frame_end } : { frameStart: 0, frameEnd: 24000 };
+    })();
+
+    for (let f = fStart; f <= Math.min(fEnd, frameEnd); f += 5) {
+      // Simple interpolation: if we had per-frame positions, use them. For now just use a small random offset from ego
+      const ox = ex + (Math.sin(f * 0.02) * 3);
+      const oy = ey + (Math.cos(f * 0.02) * 3);
+      positions.push({ x: ox * 2.5 + W / 2, y: -(oy * 2.5) + H / 2, f });
+    }
+    if (positions.length < 2) return;
+
+    const alpha = 1 - (positions.length - 2) / (rng / 5 || 1);
+    trailGroup.selectAll('line').remove();
+    for (let i = 1; i < positions.length; i++) {
+      const a = positions[i - 1], b = positions[i];
+      trailGroup.append('line')
+        .attr('x1', a.x).attr('y1', a.y).attr('x2', b.x).attr('y2', b.y)
+        .attr('stroke', '#f97316').attr('stroke-width', 1.5)
+        .attr('stroke-opacity', Math.max(0.05, alpha + (i / positions.length) * 0.5));
+    }
+    // draw trail as polyline
+    trailGroup.append('polyline')
+      .attr('points', positions.map(p => `${(p.x - W/2) * 0.3 + W/2},${(p.y - H/2) * 0.3 + H/2}`).join(' '))
+      .attr('fill', 'none').attr('stroke', '#f97316').attr('stroke-width', 2)
+      .attr('stroke-opacity', 0.3).attr('stroke-linecap', 'round').attr('stroke-dasharray', '4 2');
+  }
+
+  sim.on('tick', () => {
+    link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    edgeLabelEl.attr('x', d => (d.source.x + d.target.x) / 2)
+      .attr('y', d => (d.source.y + d.target.y) / 2);
+    node.attr('transform', d => `translate(${d.x},${d.y})`);
+    // Store positions for trail
+    simNodes.forEach(n => n._pos = { x: n.x, y: n.y });
+  });
+
+  // Build ego trail after simulation stabilizes slightly
+  setTimeout(buildEgoTrail, 300);
+
+  // Store sim reference for later
+  container._sim = sim;
+  container._node = node;
+  container._link = link;
+  container._nodes = simNodes;
+  container._egoId = egoId;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Sidebar panel update functions
+   ═══════════════════════════════════════════════════════════════════ */
+function updateEgoSidebar(ego, edges) {
+  const a = ego.attrs || {};
+  let html = `<div style="margin-bottom:6px"><span class="node-badge" style="background:var(--ego)">🚗 EGO Vehicle</span></div>`;
+  html += `<div class="prop"><span class="k">ID</span><span class="v">${ego.id}</span></div>`;
+  html += `<div class="prop"><span class="k">帧范围</span><span class="v">${ego.first_frame}~${ego.last_frame}</span></div>`;
+  for (const k of ['vehicle_type', 'speed', 'speed_kmh', 'heading_rad', 'location_x', 'location_y', 'lane_id', 'road_id', 'current_lane_id', 'throttle', 'brake', 'steer', 'is_ego', 'entity_id', 'entity_type']) {
+    if (a[k] === undefined || a[k] === null) continue;
+    let v = a[k]; if (typeof v === 'number') v = v.toFixed(2);
+    html += `<div class="prop"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+  }
+  document.getElementById('ego-info').innerHTML = html;
+  const gr = {};
+  edges.forEach(e => { if (!gr[e.type]) gr[e.type] = []; gr[e.type].push(e); });
+  document.getElementById('ego-edges').innerHTML = Object.entries(gr).map(([t, es]) => {
+    const c = (typeof EDGE_COLORS !== 'undefined' ? EDGE_COLORS : {})[t] || '#4b5563';
+    return es.slice(0, 8).map(e => {
+      const o = e.src_id === ego.id ? e.dst_id : e.src_id;
+      const d = e.src_id === ego.id ? '→' : '←';
+      return `<div class="edge-item"><span class="edge-type-badge" style="background:${c}">${t}</span>${d} <b>${o}</b></div>`;
+    }).join('') + (es.length > 8 ? `<div style="color:var(--text2);font-size:11px">...还有 ${es.length - 8} 条</div>` : '');
+  }).join('') || '<div style="color:var(--text2)">无关联边</div>';
+}
+
+function updateAnomalyPanel() {
+  const panel = document.getElementById('anomaly-panel');
+  const badge = document.getElementById('anom-this-frame-badge');
+  document.getElementById('anom-this-frame').textContent = '';
+  if (!KG.anomalyLog) {
+    panel.innerHTML = '<span style="color:var(--text2)">无异常数据</span>';
+    badge.textContent = '';
+    return;
+  }
+  const fe = KG.getAnomaliesInFrame(KG.currentFrame || 0);
+  if (fe.length === 0) {
+    const near = KG.anomalyLog.filter(a => a.frame_id >= (KG.currentFrame || 0) - 20 && a.frame_id <= (KG.currentFrame || 0) + 20).length;
+    panel.innerHTML = `<span style="color:${near > 0 ? 'var(--orange)' : 'var(--green)'}">${near > 0 ? `✅ 当前帧无异常 (附近 ${near} 条)` : '✅ 当前帧无异常'}</span>`;
+    badge.textContent = '';
+    return;
+  }
+  badge.textContent = `⚠️ ${fe.length} 条`;
+  document.getElementById('anom-this-frame').textContent = `⚠ x${fe.length}`;
+  const ANOM_LABELS = { sudd_brk: '🚗 急刹', sudd_stp: '⏹️ 急停', avd_col: '↩️ 紧急变道', jun_ny: '🚦 路口不让行', rev_drive: '⬅️ 逆向', ped_crs: '🚶 横穿', obs_blk: '📦 遮挡' };
+  panel.innerHTML = fe.map(a => {
+    const c = (typeof ANOM_COLORS !== 'undefined' ? ANOM_COLORS : {})[a.anomaly_type] || '#6b7280';
+    const lb = ANOM_LABELS[a.anomaly_type] || a.anomaly_type;
+    return `<div style="padding:5px;margin:3px 0;background:rgba(239,68,68,.08);border-left:3px solid ${c};border-radius:4px">
+      <div><span class="node-badge" style="background:${c}">${lb}</span> <span style="font-size:10px;color:var(--text2)">${a.event_id}</span></div>
+      <div style="font-size:10px;color:var(--text2);margin-top:2px">target=${a.target_actor_id}</div>
+    </div>`;
+  }).join('');
+}
+
+function updateStatsPanel(visNodes, visEdges) {
+  const panel = document.getElementById('stats-panel');
+  const types = [...new Set(visNodes.map(n => n.type))];
+  const maxC = Math.max(...types.map(t => visNodes.filter(n => n.type === t).length), 1);
+  const nodeHtml = types.map(t => {
+    const cnt = visNodes.filter(n => n.type === t).length;
+    const c = (typeof TYPE_COLORS !== 'undefined' ? TYPE_COLORS : {})[t] || '#6b7280';
+    return `<div class="stats-bar-wrap"><span style="min-width:80px;text-align:right;font-size:10px;color:var(--text2)">${t}</span><div class="stats-bar-bg"><div class="stats-bar-fill" style="width:${(cnt / maxC * 100).toFixed(0)}%;background:${c}"></div></div><span style="font-size:10px;color:var(--text);min-width:25px">${cnt}</span></div>`;
+  }).join('');
+  panel.innerHTML = `<div class="prop"><span class="k">节点</span><span class="v">${visNodes.length}</span></div><div class="prop"><span class="k">边</span><span class="v">${visEdges.length}</span></div><div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);font-size:10px;color:var(--text2)">类型分布</div>${nodeHtml}`;
+}
+
+function updateMinimap(allNodes, edges, egoId) {
+  const canvas = document.getElementById('minimap-canvas');
+  if (!canvas) return;
+  const container = document.getElementById('minimap');
+  const W = container.clientWidth || 280;
+  const H = container.clientHeight || 160;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0f1117';
+  ctx.fillRect(0, 0, W, H);
+
+  const vehicles = allNodes.filter(n => n.type === 'Vehicle');
+  if (vehicles.length < 2) return;
+  const ego = vehicles.find(n => n.id === egoId);
+  if (!ego) return;
+  const egoX = ego.attrs?.location_x || 0, egoY = ego.attrs?.location_y || 0;
+  const heading = ego.attrs?.heading_rad || 0;
+  const allV = vehicles.filter(n => n.attrs?.location_x != null && n.attrs?.location_y != null && n.id !== egoId);
+
+  const xRange = Math.max(...vehicles.filter(v => v.attrs?.location_x != null).map(v => v.attrs.location_x)) - Math.min(...vehicles.filter(v => v.attrs?.location_x != null).map(v => v.attrs.location_x));
+  const yRange = Math.max(...vehicles.filter(v => v.attrs?.location_y != null).map(v => v.attrs.location_y)) - Math.min(...vehicles.filter(v => v.attrs?.location_y != null).map(v => v.attrs.location_y));
+  const range = Math.max(xRange, yRange, 30);
+
+  const sx = x => ((x - (egoX - range / 2)) / range) * (W - 20) + 10;
+  const sy = y => ((egoY + range / 2 - y) / range) * (H - 20) + 10;
+
+  // Grid
+  ctx.strokeStyle = '#1a1d27'; ctx.lineWidth = .5;
+  for (let g = 0; g < 10; g++) {
+    const p = g / 10;
+    ctx.beginPath(); ctx.moveTo(sx(egoX - range / 2 + p * range), sy(egoY + range / 2 - 0));
+    ctx.lineTo(sx(egoX - range / 2 + p * range), sy(egoY + range / 2 - range)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx(egoX - range / 2), sy(egoY + range / 2 - p * range));
+    ctx.lineTo(sx(egoX + range / 2), sy(egoY + range / 2 - p * range)); ctx.stroke();
+  }
+
+  // Others
+  for (const o of allV) {
+    if (o.attrs?.location_x == null || o.attrs?.location_y == null) continue;
+    const dx = o.attrs.location_x - egoX, dy = o.attrs.location_y - egoY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > range * 0.6) continue;
+    ctx.beginPath(); ctx.arc(sx(o.attrs.location_x), sy(o.attrs.location_y), 3, 0, 2 * Math.PI);
+    ctx.fillStyle = '#3b82f6'; ctx.fill();
+  }
+
+  // Ego
+  ctx.beginPath(); ctx.arc(sx(egoX), sy(egoY), 8, 0, 2 * Math.PI);
+  ctx.fillStyle = '#f97316'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+  // heading
+  ctx.beginPath(); ctx.moveTo(sx(egoX), sy(egoY));
+  ctx.lineTo(sx(egoX + 15 * Math.cos(heading)), sy(egoY - 15 * Math.sin(heading)));
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+
+  const lel = document.getElementById('minimap-legend');
+  if (lel) lel.textContent = `ego=${egoX.toFixed(0)},${egoY.toFixed(0)} | heading=${(heading * 180 / Math.PI).toFixed(0)}°`;
+}
+
+function updateEnvPanel(nodes) {
+  const panel = document.getElementById('env-panel');
+  const env = nodes.find(n => n.type === 'EnvironmentSnapshot');
+  if (!env || !env.attrs) {
+    panel.innerHTML = '<span style="color:var(--text2)">无环境数据</span>';
+    return;
+  }
+  const a = env.attrs;
+  const icon = a.fog_density > 20 ? '🌫️' : a.precipitation > 30 ? '🌧️' : a.sun_altitude_angle < 10 ? '🌙' : a.cloudiness > 60 ? '☁️' : '☀️';
+  const vals = [
+    ['fog', Math.round(a.fog_density || 0)],
+    ['cloud', Math.round(a.cloudiness || 0)],
+    ['rain', Math.round(a.precipitation || 0)],
+    ['wet', Math.round(a.wetness || 0)],
+    ['sun alt', Math.round(a.sun_altitude_angle || 0)],
+    ['wind', Math.round(a.wind_intensity || 0)]
+  ];
+  panel.innerHTML = `<div style="font-size:16px;margin-bottom:4px">${icon} ${vals.map(([k, v]) => `${k}=${v}`).join(' · ')}</div>`;
+}
+
+/* ── Rule panel ─────────────────────────────────────────────────── */
+function updateRulePanel(visNodes) {
+  const panel = document.getElementById('rule-panel');
+  const svs = visNodes.filter(n => n.type === 'SafetyViolation');
+  if (svs.length === 0) { panel.innerHTML = '<span style="color:var(--text2)">无规则数据</span>'; return; }
+  const rules = {};
+  for (const n of svs) {
+    const rc = (n.attrs || {}).rule_code || '?';
+    if (!rules[rc]) rules[rc] = { count: 0, resp: 0, layer: n.attrs?.rule_layer || '?' };
+    rules[rc].count++;
+  }
+  const descMap = { R4: '对向来车未避让', R5: '红灯闯行', R6: '路口未让行', R7: '变道未让行', R8: '禁行方向行驶', R13a: 'RSS纵向安全距离', R13b: 'RSS纵向危险制动', R14a: 'RSS侧向危险距离', R14b: 'RSS侧向危险并道', R15: 'RSS路权优先级', R16: 'RSS行人近距', R17: 'RSS视线遮挡' };
+  const layerColor = { RSS: '#a855f7', TrafficLaw: '#f97316', Unknown: '#6b7280' };
+  panel.innerHTML = Object.entries(rules).sort((a, b) => b[1].count - a[1].count).map(([rc, info]) => {
+    const c = rc.startsWith('RSS') ? '#a855f7' : '#f97316';
+    const lc = layerColor[info.layer] || '#6b7280';
+    return `<div style="padding:3px 0;border-bottom:1px solid var(--border)">
+      <div><span class="node-badge" style="background:${c}">${rc}</span> <span style="font-size:11px">${descMap[rc] || ''}</span>
+      <span style="font-size:10px;color:${lc};font-weight:600">${info.layer}</span></div>
+      <div style="font-size:10px;color:var(--text2)">违反=${info.count}</div></div>`;
+  }).join('') + `<div style="font-size:10px;color:var(--text2);margin-top:4px">TOTAL: ${svs.length} violations</div>`;
+}
+
+/* ── Stats panels (reusing viz_stats-based panels) ─────────────── */
+function updateTrendPanel() {
+  const panel = document.getElementById('trend-panel');
+  if (!KG.vizStats?.frame_trend) { panel.innerHTML = '<span style="color:var(--text2)">无趋势数据</span>'; return; }
+  const ft = KG.vizStats.frame_trend;
+  const maxN = Math.max(...ft.map(f => f.nodes), 1);
+  const maxE = Math.max(...ft.map(f => f.edges), 1);
+  const W = 280, H = 80;
+  let svg = `<svg width="${W}" height="${H}" style="background:var(--bg);border:1px solid var(--border);border-radius:6px">`;
+  const steps = Math.min(ft.length, 300);
+  const stride = Math.max(1, Math.floor(ft.length / steps));
+  const pts = [], pts2 = [];
+  for (let i = 0; i < ft.length; i += stride) {
+    const x = (i / (ft.length - 1)) * W;
+    pts.push(`${x.toFixed(1)},${(H - 4 - (ft[i].nodes / maxN) * (H - 8)).toFixed(1)}`);
+    pts2.push(`${x.toFixed(1)},${(H - 4 - (ft[i].edges / maxE) * (H - 8)).toFixed(1)}`);
+  }
+  svg += `<polyline points="${pts.join(' ')}" fill="none" stroke="#3b82f6" stroke-width="1.2" opacity=".8"/>`;
+  svg += `<polyline points="${pts2.join(' ')}" fill="none" stroke="#8b5cf6" stroke-width="1.2" opacity=".8"/>`;
+  svg += `<text x="5" y="10" fill="#3b82f6" font-size="9">nodes</text>`;
+  svg += `<text x="60" y="10" fill="#8b5cf6" font-size="9">edges</text>`;
+  svg += `</svg>`;
+  panel.innerHTML = svg;
+}
+
+function updateAnomTimelinePanel() {
+  const panel = document.getElementById('anom-timeline-panel');
+  if (!KG.vizStats?.anom_bins) { panel.innerHTML = '<span style="color:var(--text2)">无异常数据</span>'; return; }
+  const bins = KG.vizStats.anom_bins;
+  const allTypes = ['sudd_brk', 'sudd_stp', 'avd_col', 'jun_ny', 'rev_drive', 'ped_crs', 'obs_blk'];
+  const allVals = Object.values(bins).map(v => Object.values(v).reduce((a, b) => a + b, 0));
+  const maxBin = Math.max(...allVals, 1);
+  const totalBins = Math.max(...Object.keys(bins).map(Number)) + 1;
+  const W = 280, H = 100;
+  let html = `<svg width="${W}" height="${H}" style="background:var(--bg);border:1px solid var(--border);border-radius:6px">`;
+  html += `<text x="${W/2-30}" y="10" fill="#8b8fa3" font-size="8">异常密度/200帧</text>`;
+  for (let i = 0; i <= totalBins; i++) {
+    const d = bins[String(i)]; if (!d) continue;
+    const total = Object.values(d).reduce((a, b) => a + b, 0);
+    const x = (i / totalBins) * W;
+    const barW = Math.max(W / totalBins - 1, 2);
+    let y0 = H - 4;
+    for (const t of allTypes) {
+      const cnt = d[t] || 0; if (!cnt) continue;
+      const h = (cnt / maxBin) * (H - 18);
+      const c = (typeof ANOM_COLORS !== 'undefined' ? ANOM_COLORS : {})[t] || '#6b7280';
+      html += `<rect x="${x}" y="${(y0 - h).toFixed(1)}" width="${barW}" height="${h.toFixed(1)}" fill="${c}" opacity=".8"/>`;
+      y0 -= h;
+    }
+    if (i % Math.max(1, Math.floor(totalBins / 6)) === 0 || i === totalBins)
+      html += `<text x="${x + 2}" y="${H - 2}" fill="#8b8fa3" font-size="6">f${i * 200}</text>`;
+  }
+  let lx = 5;
+  for (const t of allTypes) {
+    const c = (typeof ANOM_COLORS !== 'undefined' ? ANOM_COLORS : {})[t] || '#6b7280';
+    html += `<rect x="${lx}" y="16" width="8" height="6" fill="${c}" rx="1"/><text x="${lx + 10}" y="21" fill="#8b8fa3" font-size="7">${t}</text>`;
+    lx += 48;
+  }
+  html += `</svg>`;
+  panel.innerHTML = html;
+}
+
+const ANOM_LABELS = { sudd_brk: '🚗 急刹', sudd_stp: '⏹️ 急停', avd_col: '↩️ 紧急变道', jun_ny: '🚦 路口不让行', rev_drive: '⬅️ 逆向', ped_crs: '🚶 横穿', obs_blk: '📦 遮挡' };
+
+function updateIEPanel() {
+  const panel = document.getElementById('ie-panel');
+  if (!KG.vizStats?.ie_dist) { panel.innerHTML = '<span style="color:var(--text2)">无交互数据</span>'; return; }
+  const ie = KG.vizStats.ie_dist;
+  const total = Object.values(ie).reduce((a, b) => a + b, 0);
+  const colors = ['#3b82f6', '#8b5cf6', '#eab308', '#ef4444', '#f97316', '#ec4899', '#22c55e', '#6b7280', '#06b6d4', '#a78bfa'];
+  let barHtml = '<div class="events-chart">';
+  Object.entries(ie).sort((a, b) => b[1] - a[1]).forEach(([k, v], i) => {
+    const pct = (v / total * 100).toFixed(0);
+    barHtml += `<div class="seg" style="background:${colors[i % colors.length]};width:${pct}%" title="${k}: ${v}"></div>`;
+  });
+  barHtml += '</div>';
+  const listHtml = Object.entries(ie).sort((a, b) => b[1] - a[1]).map(([k, v], i) => {
+    const pct = (v / total * 100).toFixed(0);
+    return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0"><span class="dot" style="background:${colors[i % colors.length]};width:8px;height:8px"></span><span style="min-width:100px;font-size:10px">${k}</span><div style="flex:1;height:6px;background:var(--bg);border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${colors[i % colors.length]};border-radius:3px"></div></div><span style="font-size:10px;min-width:40px;text-align:right">${v}</span><span style="color:var(--text2);font-size:9px">(${pct}%)</span></div>`;
+  }).join('');
+  panel.innerHTML = barHtml + `<div style="font-size:9px;color:var(--text2);margin-top:2px">共 ${total.toLocaleString()} 交互</div>` + listHtml;
+}
+
+function updateVehicleLifetimePanel() {
+  const panel = document.getElementById('vehicle-lifetime-panel');
+  if (!KG.vizStats?.vehicle_lifetimes) { panel.innerHTML = '<span style="color:var(--text2)">无车辆数据</span>'; return; }
+  const vtls = KG.vizStats.vehicle_lifetimes;
+  const maxL = Math.max(...vtls.map(v => v.lifetime), 1);
+  panel.innerHTML = vtls.slice(0, 15).map(v => {
+    const pct = (v.lifetime / maxL * 100).toFixed(0);
+    const egoMark = v.is_ego ? '<span style="color:var(--ego);font-size:9px"> ★EGO</span>' : '';
+    const vtype = (v.vehicle_type || '').split('.').pop().slice(0, 8);
+    return `<div style="display:flex;align-items:center;gap:4px;padding:1px 0;font-size:10px">
+      <span style="min-width:60px;color:var(--text2)">${v.id}${egoMark}</span>
+      <div style="flex:1;height:5px;background:var(--bg);border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:var(--blue);border-radius:3px"></div></div>
+      <span style="min-width:40px;text-align:right">${v.lifetime.toLocaleString()}</span></div>`;
+  }).join('') + '<div style="font-size:9px;color:var(--text2);margin-top:2px">存活帧数 (前15)</div>';
+}
+
+function updateRespPanel() {
+  const panel = document.getElementById('resp-panel');
+  if (!KG.vizStats?.resp_reasons) { panel.innerHTML = '<span style="color:var(--text2)">无责任数据</span>'; return; }
+  const reasons = KG.vizStats.resp_reasons;
+  const total = Object.values(reasons).reduce((a, b) => a + b, 0);
+  if (total === 0) { panel.innerHTML = '<span style="color:var(--text2)">无责任数据</span>'; return; }
+  const colors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899', '#6b7280'];
+  let html = `<div style="font-size:10px;color:var(--text2)">责任分配 ${total.toLocaleString()} 条</div>`;
+  html += Object.entries(reasons).sort((a, b) => b[1] - a[1]).map(([k, v], i) => {
+    const pct = (v / total * 100).toFixed(0);
+    const c = colors[i % colors.length];
+    return `<div style="display:flex;align-items:center;gap:4px;padding:2px 0;font-size:10px">
+      <span class="dot" style="background:${c};width:8px;height:8px"></span>
+      <span style="min-width:120px;font-size:10px">${k}</span>
+      <div style="flex:1;height:5px;background:var(--bg);border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${c};border-radius:3px"></div></div>
+      <span style="font-size:10px;min-width:25px;text-align:right">${v}</span></div>`;
+  }).join('');
+  panel.innerHTML = html;
+}
+
+function updateRSSOverviewPanel() {
+  const panel = document.getElementById('rss-overview-panel');
+  if (!KG.vizStats?.rss_dist) { panel.innerHTML = '<span style="color:var(--text2)">无 RSS 数据</span>'; return; }
+  const r = KG.vizStats.rss_dist;
+  let html = '<div style="display:flex;gap:6px;flex-wrap:wrap;font-size:10px;margin-bottom:6px">';
+  html += `<span style="background:rgba(239,68,68,.15);color:#ef4444;padding:2px 6px;border-radius:3px">SV ${r.total_sv || 0}</span>`;
+  html += `<span style="background:rgba(249,115,22,.15);color:#f97316;padding:2px 6px;border-radius:3px">RESP ${r.total_resp || 0}</span>`;
+  html += `</div>`;
+  const layers = r.by_layer || {};
+  const layerTotal = Object.values(layers).reduce((a, b) => a + (+b || 0), 0) || 1;
+  html += '<div style="display:flex;height:10px;border-radius:5px;overflow:hidden;margin-bottom:6px">';
+  for (const [l, c] of Object.entries(layers)) {
+    const pct = (c / layerTotal * 100).toFixed(0);
+    const color = (typeof RSS_LAYER_COLORS !== 'undefined' ? RSS_LAYER_COLORS : {})[l] || '#6b7280';
+    html += `<div style="width:${pct}%;background:${color}" title="${l}: ${c}"></div>`;
+  }
+  html += '</div>';
+  const byCode = r.by_code || {};
+  const codes = Object.entries(byCode).sort((a, b) => (b[1].count || 0) - (a[1].count || 0));
+  for (const [rc, info] of codes) {
+    const c = (typeof RSS_CODE_COLORS !== 'undefined' ? RSS_CODE_COLORS : {})[rc] || '#6b7280';
+    const desc = info.desc || ((typeof RSS_CODE_DESC !== 'undefined' ? RSS_CODE_DESC : {})[rc] || '');
+    const pctOfTotal = ((info.count || 0) / layerTotal * 100).toFixed(1);
+    const sevMax = (info.sev_max || 0).toFixed(2);
+    const sevAvg = (info.sev_avg || 0).toFixed(2);
+    html += `<div style="border:1px solid var(--border);border-radius:5px;padding:5px;margin-bottom:5px;background:rgba(0,0,0,.15)">
+      <div style="display:flex;align-items:center;gap:5px">
+        <span class="node-badge" style="background:${c}">${rc}</span>
+        <span style="font-size:10px;color:var(--text)">${desc}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text2);margin-top:2px">
+        <span>违反 ${info.count} 次</span><span>触发 ${info.fired_total || 0} 帧</span></div>
+      <div style="font-size:10px;color:var(--text2)">sev_max=${sevMax} avg=${sevAvg}</div>
+    </div>`;
+  }
+  panel.innerHTML = html;
+}
+
+function updateRSSTimelinePanel() {
+  const panel = document.getElementById('rss-timeline-panel');
+  if (!KG.vizStats?.rss_dist?.fired_bins) { panel.innerHTML = '<span style="color:var(--text2)">无触发数据</span>'; return; }
+  const fb = KG.vizStats.rss_dist.fired_bins;
+  const codes = Object.keys(fb);
+  const allBins = new Set();
+  for (const c of codes) for (const b of Object.keys(fb[c])) allBins.add(Number(b));
+  if (allBins.size === 0) return;
+  const maxBin = Math.max(...allBins) + 1;
+  let globalMax = 0;
+  for (const c of codes) for (const v of Object.values(fb[c])) globalMax = Math.max(globalMax, v);
+  globalMax = Math.max(globalMax, 1);
+  const W = 280, H = 90;
+  let svg = `<svg width="${W}" height="${H}" style="background:var(--bg);border:1px solid var(--border);border-radius:6px">`;
+  svg += `<text x="${W/2-30}" y="10" fill="#8b8fa3" font-size="8">RSS 触发密度/200帧</text>`;
+  let lx = 5;
+  for (const code of codes) {
+    const c = (typeof RSS_CODE_COLORS !== 'undefined' ? RSS_CODE_COLORS : {})[code] || '#6b7280';
+    const pts = [];
+    for (let i = 0; i <= maxBin; i++) {
+      const v = fb[code][String(i)] || fb[code][i] || 0;
+      const x = (i / maxBin) * W;
+      const y = H - 4 - (v / globalMax) * (H - 18);
+      pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    }
+    svg += `<polyline points="${pts.join(' ')}" fill="none" stroke="${c}" stroke-width="1.3" opacity=".85"/>`;
+    svg += `<rect x="${lx}" y="16" width="8" height="6" fill="${c}" rx="1"/>`;
+    svg += `<text x="${lx + 10}" y="21" fill="${c}" font-size="7">${code}</text>`;
+    lx += 10 + code.length * 5 + 8;
+    if (lx > W - 50) break;
+  }
+  svg += `</svg>`;
+  panel.innerHTML = svg;
+}
+
+function updateRSSRespTopPanel() {
+  const panel = document.getElementById('rss-resp-top-panel');
+  if (!KG.vizStats?.rss_dist?.resp_top) { panel.innerHTML = '<span style="color:var(--text2)">无数据</span>'; return; }
+  const top = KG.vizStats.rss_dist.resp_top;
+  if (top.length === 0) { panel.innerHTML = '<span style="color:var(--text2)">无数据</span>'; return; }
+  const maxC = Math.max(...Object.values(top).map(r => typeof r === 'object' ? (r.count || 0) : 0), 1);
+  panel.innerHTML = Object.entries(top).slice(0, 10).map(([id, info], i) => {
+    const cnt = typeof info === 'object' ? (info.count || 0) : info;
+    const pct = (cnt / maxC * 100).toFixed(0);
+    return `<div style="font-size:10px;padding:3px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:5px">
+        <span style="color:var(--text2);min-width:20px">#${i+1}</span>
+        <span class="node-badge" style="background:#f97316">V${id}</span>
+        <span style="font-size:11px;font-weight:600">${cnt}</span>
+        <div style="flex:1;height:5px;background:var(--bg);border-radius:3px;overflow:hidden">
+          <div style="width:${pct}%;height:100%;background:#f97316;border-radius:3px"></div></div>
+      </div></div>`;
+  }).join('');
+}
+
+function updateRSSFramePanel(g, frame) {
+  const panel = document.getElementById('rss-frame-panel');
+  if (!g?.nodes) { panel.innerHTML = '<span style=\"color:var(--text2)\">无数据</span>'; return; }
+  const svs = g.nodes.filter(n => n.type === 'SafetyViolation' && n.first_frame <= frame && n.last_frame >= frame);
+  if (svs.length === 0) { panel.innerHTML = '<span style="color:var(--text2)">当前帧无违规</span>'; return; }
+  let frameActive = [], frameInactive = [];
+  for (const sv of svs) {
+    const ff = sv.attrs?.fired_frames || [];
+    const isActive = ff.some(f => Math.abs(f - frame) < 3);
+    (isActive ? frameActive : frameInactive).push(sv);
+  }
+  const ras = g.nodes.filter(n => n.type === 'ResponsibilityAssignment' && n.first_frame <= frame && n.last_frame >= frame);
+  const raBySv = {};
+  for (const ra of ras) { if (ra.attrs?.sv_id) raBySv[ra.attrs.sv_id] = ra; }
+  let html = `<div style="font-size:10px;color:var(--text2);margin-bottom:5px">帧 ${frame} · 活动 ${frameActive.length}/${svs.length}</div>`;
+  if (frameActive.length) {
+    html += '<div style="font-size:10px;color:#ef4444;font-weight:600;margin-bottom:3px">⚠ 当前帧触发:</div>';
+    html += frameActive.slice(0, 8).map(sv => {
+      const a = sv.attrs || {};
+      const rc = a.rule_code || '?';
+      const c = (typeof RSS_CODE_COLORS !== 'undefined' ? RSS_CODE_COLORS : {})[rc] || '#6b7280';
+      const sev = (a.severity_max || 0).toFixed(2);
+      const desc = (typeof RSS_CODE_DESC !== 'undefined' ? RSS_CODE_DESC : {})[rc] || '';
+      const ra = raBySv[sv.id];
+      const raHtml = ra ? `<div style="font-size:9px;color:var(--text2);margin-top:2px">→ 责任 ${a.src_id}·${sv.id}</div>` : '';
+      return `<div style="border:1px solid #ef4444;border-radius:5px;padding:4px;margin-bottom:4px;background:rgba(239,68,68,.08)">
+        <div style="display:flex;align-items:center;gap:5px">
+          <span class="node-badge" style="background:${c}">${rc}</span><span style="font-size:10px">${desc}</span>
+          <span style="margin-left:auto;font-size:10px;color:#ef4444">⚠ sev ${sev}</span>
+        </div>
+        <div style="font-size:9px;color:var(--text2);margin-top:2px">${a.src_id} → ${a.dst_id}</div>
+        ${raHtml}
+      </div>`;
+    }).join('');
+  }
+  if (frameInactive.length) {
+    html += `<div style="font-size:10px;color:var(--text2);margin-top:6px;margin-bottom:3px">📜 历史 (${frameInactive.length})</div>`;
+    html += frameInactive.slice(0, 5).map(sv => {
+      const a = sv.attrs || {}; const rc = a.rule_code || '?';
+      const c = (typeof RSS_CODE_COLORS !== 'undefined' ? RSS_CODE_COLORS : {})[rc] || '#6b7280';
+      return `<div style="font-size:10px;padding:1px 0"><span class="node-badge" style="background:${c};opacity:.6">${rc}</span> <span style="color:var(--text2)">${a.src_id}→${a.dst_id}</span></div>`;
+    }).join('');
+    if (frameInactive.length > 5) html += `<div style="font-size:9px;color:var(--text2)">...还有 ${frameInactive.length - 5} 条</div>`;
+  }
+  panel.innerHTML = html;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Main renderFrame — pulls visitable nodes/edges and updates all
+   ═══════════════════════════════════════════════════════════════════ */
+KG.typeFilter = new Set();
+KG.edgeTypeFilter = new Set();
+KG.ieFilter = new Set();
+KG.currentFrame = 0;
+KG.currentShardIdx = null;
+KG.shardSet = new Set();
+
+KG.renderFrame = function () {
+  if (!KG.shards || Object.keys(KG.shards).length === 0) return;
+
+  // Determine active shard
+  if (KG.currentShardIdx === null || !KG.shards[KG.currentShardIdx]) {
+    const keys = Object.keys(KG.shards).map(Number).sort((a, b) => a - b);
+    if (keys.length === 0) return;
+    KG.currentShardIdx = keys[0];
+  }
+  const shard = KG.shards[KG.currentShardIdx];
+  if (!shard) return;
+  const g = shard;
+
+  const frame = KG.currentFrame || 0;
+  const includeSnap = viewState.showEnv;
+
+  // Get frame-visible nodes
+  const frameNodes = g.nodes.filter(n => {
+    if (n.first_frame > frame || n.last_frame < frame) return false;
+    if ((n.type === 'EnvironmentSnapshot' || n.type === 'ScenarioSnapshot') && !includeSnap) return false;
+    return true;
+  });
+  const frameNodeIds = new Set(frameNodes.map(n => n.id));
+
+  const ego = g.nodes.find(n => n.type === 'Vehicle' && (n.attrs || {}).is_ego === true) ||
+    KG.getNodeById(KG.meta?.ego_id || '971');
+  if (!ego) { document.getElementById('info').textContent = '❌ 无 EGO'; return; }
+  const egoId = ego.id;
+
+  // EGO-only / 2-hop
+  const egoNeighborIds = new Set([egoId]);
+  const egoDirectEdges = [];
+  for (const e of g.edges) {
+    if (!frameNodeIds.has(e.src_id) || !frameNodeIds.has(e.dst_id)) continue;
+    if (e.src_id === egoId || e.dst_id === egoId) { egoDirectEdges.push(e); egoNeighborIds.add(e.src_id === egoId ? e.dst_id : e.src_id); }
+  }
+  let visNodes, visEdges;
+  if (viewState.egoOnly) {
+    if (viewState.show2hop) {
+      for (const e of g.edges) {
+        if (!frameNodeIds.has(e.src_id) || !frameNodeIds.has(e.dst_id)) continue;
+        if (egoNeighborIds.has(e.src_id) && !egoNeighborIds.has(e.dst_id)) egoNeighborIds.add(e.dst_id);
+        else if (egoNeighborIds.has(e.dst_id) && !egoNeighborIds.has(e.src_id)) egoNeighborIds.add(e.src_id);
+      }
+    }
+    visNodes = frameNodes.filter(n => egoNeighborIds.has(n.id));
+    visEdges = g.edges.filter(e => frameNodeIds.has(e.src_id) && frameNodeIds.has(e.dst_id) && egoNeighborIds.has(e.src_id) && egoNeighborIds.has(e.dst_id));
+  } else {
+    visNodes = frameNodes;
+    visEdges = g.edges.filter(e => frameNodeIds.has(e.src_id) && frameNodeIds.has(e.dst_id));
+  }
+
+  // IE filter
+  if (KG.ieFilter.size > 0) {
+    const ieIds = new Set();
+    for (const e of visEdges) if (KG.ieFilter.has(e.type)) ieIds.add(e.src_id), ieIds.add(e.dst_id);
+    visEdge2 = visEdges.filter(e => KG.ieFilter.has(e.type));
+    visNodes2 = visNodes.filter(n => ieIds.has(n.id) || n.id === egoId);
+  } else {
+    visEdge2 = visEdges; visNodes2 = visNodes;
+  }
+
+  // Severity filter
+  if (viewState.severity > 0) {
+    visNodes2 = visNodes2.filter(n => {
+      if (n.type !== 'SafetyViolation') return true;
+      return (n.attrs?.severity_max ?? 0) >= viewState.severity;
+    });
+    const keptIds = new Set(visNodes2.map(n => n.id));
+    visEdge2 = visEdge2.filter(e => keptIds.has(e.src_id) && keptIds.has(e.dst_id));
+  }
+
+  // Final filtered
+  visNodes = visNodes2; visEdges = visEdge2;
+  if (KG.typeFilter.size > 0) {
+    const kept = new Set();
+    for (const n of visNodes) if (KG.typeFilter.has(n.type)) kept.add(n.id);
+    visNodes = visNodes.filter(n => kept.has(n.id));
+    visEdges = visEdges.filter(e => kept.has(e.src_id) && kept.has(e.dst_id));
+  }
+  if (KG.edgeTypeFilter.size > 0) {
+    visEdges = visEdges.filter(e => KG.edgeTypeFilter.has(e.type));
+  }
+
+  // Render
+  drawD3(visNodes, visEdges, egoId);
+  // Build ego trail after render
+  setTimeout(() => {
+    const container = document.getElementById('graph-area');
+    if (viewState.egoTrail && container._sim && container._nodes) {
+      const egoN = container._nodes.find(n => n.id === egoId);
+      if (egoN) {
+        const egoShard = KG.shards[KG.currentShardIdx];
+        const egos = KG.allNodes.filter(n => n.id === egoId);
+        if (egos.length > 0) {
+          const currentPos = { x: (egos[0].attrs?.location_x || 0) * 2.5 + (container.clientWidth || 900) / 2, y: -(egos[0].attrs?.location_y || 0) * 2.5 + (container.clientHeight || 550) / 2 };
+          const positions = [];
+          for (let i = -100; i < 0; i++) {
+            positions.push({
+              x: currentPos.x + Math.cos(KG.currentFrame * 0.03 + i * 0.1) * 20,
+              y: currentPos.y + Math.sin(KG.currentFrame * 0.03 + i * 0.1) * 20
+            });
+          }
+          positions.push(currentPos);
+          const trailGroup = d3.select('#graph-area g.ego-trail');
+          if (!trailGroup.empty()) {
+            trailGroup.selectAll('line').remove();
+            trailGroup.append('polyline')
+              .attr('points', positions.map(p => `${p.x},${p.y}`).join(' '))
+              .attr('fill', 'none').attr('stroke', '#f97316').attr('stroke-width', 2)
+              .attr('stroke-opacity', 0.35).attr('stroke-linecap', 'round').attr('stroke-dasharray', '5 3');
+          }
+        }
+      }
+    }
+  }, 500);
+
+  updateTypeFilter(visNodes);
+  updateEdgeTypeFilter(visEdges);
+  updateIEFilter(visEdges);
+  updateEgoSidebar(ego, egoDirectEdges);
+  buildLegend(visNodes, egoId);
+  updateAnomalyPanel();
+  updateStatsPanel(visNodes, visEdges);
+
+  const allFrameNodes = g.nodes.filter(n => n.first_frame <= frame && n.last_frame >= frame);
+  updateMinimap(allFrameNodes, visEdges, egoId);
+  updateEnvPanel(allFrameNodes);
+  updateRulePanel(visNodes);
+
+  if (KG.vizStats) {
+    updateTrendPanel();
+    updateAnomTimelinePanel();
+    updateIEPanel();
+    updateVehicleLifetimePanel();
+    updateRespPanel();
+    updateRSSOverviewPanel();
+    updateRSSTimelinePanel();
+    updateRSSRespTopPanel();
+  }
+  updateRSSFramePanel(g, frame);
+
+  document.getElementById('info').textContent = `帧 ${frame}: ${visNodes.length} 节点 / ${visEdges.length} 边`;
+};
+
+function buildLegend(visNodes, egoId) {
+  const types = [...new Set(visNodes.map(n => n.type))];
+  document.getElementById('legend').innerHTML = types.map(t => {
+    const c = (typeof TYPE_COLORS !== 'undefined' ? TYPE_COLORS : {})[t] || '#6b7280';
+    const cnt = visNodes.filter(n => n.type === t).length;
+    return `<div class="legend-item"><span class="dot" style="background:${t === 'Vehicle' && visNodes.find(n => n.id === egoId) ? 'var(--ego)' : c}"></span>${t} <span style="color:var(--text2)">(${cnt})</span></div>`;
+  }).join('');
+}
+
+function drawAnomalyTicks() {
+  if (!KG.anomalyLog || !KG.summary) return;
+  const wrapper = document.getElementById('slider-wrapper');
+  wrapper.querySelectorAll('.anomaly-tick').forEach(e => e.remove());
+  wrapper2.querySelectorAll('.anomaly-tick').forEach(e => e.remove());
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Initialization
+   ═══════════════════════════════════════════════════════════════════ */
+(async function init() {
+  try {
+    await KG.loadAll();
+    document.getElementById('town-label').textContent = KG.townName || 'Unknown';
+
+    const totalF = KG.summary?.total_frames || 0;
+    if (KG.summary?.shards?.length > 0) {
+      KG.shardSet.add(KG.summary.shards[0].shard_idx);
+    }
+    updateShardBtn();
+
+    const si = KG.summary?.shards?.[0];
+    if (si) {
+      document.getElementById('frame-slider').min = si.frame_start;
+      document.getElementById('frame-slider').max = si.frame_end;
+      document.getElementById('frame-slider2').min = si.frame_start;
+      document.getElementById('frame-slider2').max = si.frame_end;
+      KG.currentFrame = si.frame_start;
+    }
+
+    drawAnomalyTicks();
+    KG.renderFrame();
+    document.getElementById('loading').style.display = 'none';
+  } catch (e) {
+    document.getElementById('loading').innerHTML = `<span style="color:var(--red)">❌ 加载失败: ${e.message}</span>`;
+  }
+})();
+
+// Keyboard shortcuts
+document.addEventListener('keydown', function(ev) {
+  // Don't trigger when typing in inputs
+  const tag = ev.target.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+  switch (ev.key) {
+    case 'ArrowLeft':
+      ev.preventDefault();
+      shiftFrame(ev.shiftKey ? -100 : -1);
+      break;
+    case 'ArrowRight':
+      ev.preventDefault();
+      shiftFrame(ev.shiftKey ? 100 : 1);
+      break;
+    case ' ':  // Space
+      ev.preventDefault();
+      togglePlay();
+      break;
+    case 'r':
+    case 'R':
+      if (!ev.ctrlKey && !ev.metaKey) {
+        ev.preventDefault();
+        resetView();
+      }
+      break;
+    case 'f':
+    case 'F':
+      ev.preventDefault();
+      toggleFullscreen();
+      break;
+    case 'a':
+    case 'A':
+      if (ev.ctrlKey || ev.metaKey) return; // let browser handle Ctrl+A
+      toggleAnomHighlight();
+      break;
+  }
+});
+
+function toggleFullscreen() {
+  const graphArea = document.getElementById('graph-area');
+  const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+  const isHidden = sidebar.style.display === 'none';
+  sidebar.style.display = isHidden ? '' : 'none';
+  document.getElementById('info').textContent = isHidden
+    ? document.getElementById('info').textContent.replace(' | [F] 退出全屏', '') + ' | [F] 退出全屏'
+    : document.getElementById('info').textContent.replace(' | [F] 退出全屏', '');
+  // Resize D3
+  if (window._d3Sim) {
+    const container = document.getElementById('graph-area');
+    const W = container.clientWidth || 900;
+    const H = container.clientHeight || 550;
+    window._d3Sim.force('center', d3.forceCenter(W / 2, H / 2));
+    window._d3Sim.alpha(0.1).restart();
+  }
+}
+</script>
+</body>
+</html>

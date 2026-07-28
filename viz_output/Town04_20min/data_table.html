@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据表格 · STKG</title>
+<link rel="stylesheet" href="shared.css">
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+</head>
+<body>
+
+<!-- ═══ Top Tab Bar ════════════════════════════════════ -->
+<div class="tab-bar">
+  <a onclick="switchTab('graph_view')">图谱视图</a>
+  <a class="active" onclick="switchTab('data_table')">数据表格</a>
+  <a onclick="switchTab('dashboard')">统计仪表盘</a>
+  <span class="town-badge">🌍 <span id="town-label">加载中...</span></span>
+</div>
+
+<!-- ═══ Toolbar ═══════════════════════════════════════ -->
+<div class="table-toolbar">
+  <span style="font-size:13px;font-weight:600">📋 数据表格</span>
+  <div class="sep"></div>
+  <span id="table-subtabs" style="display:flex;gap:0">
+    <a class="active" data-table="nodes" onclick="switchTable('nodes')">节点表</a>
+    <a data-table="edges" onclick="switchTable('edges')">边表</a>
+  </span>
+  <div class="sep"></div>
+  <label>🔍 搜索 <input type="text" id="search-input" placeholder="ID/entity_id..." style="width:140px" oninput="onTableSearch()"></label>
+  <label>类型 <select id="type-filter" onchange="onTableFilter()"></select></label>
+  <label>排序 <select id="sort-select" onchange="onTableSort()">
+    <option value="id_asc">ID ↑</option><option value="id_desc">ID ↓</option>
+    <option value="frame_asc">first_frame ↑</option><option value="frame_desc">first_frame ↓</option>
+    <option value="sev_desc">severity ↓</option><option value="sev_asc">severity ↑</option>
+  </select></label>
+  <label>每页 <select id="page-size" onchange="onPageSizeChange()">
+    <option value="25">25</option><option value="50" selected>50</option><option value="100">100</option>
+  </select></label>
+  <button class="sm" onclick="exportCSV()">📥 CSV</button>
+</div>
+
+<!-- ═══ Count Bar ═════════════════════════════════════ -->
+<div class="table-info">
+  <span id="table-count">共 -- 条，当前显示 -- 条</span>
+</div>
+
+<!-- ═══ Table ═════════════════════════════════════════ -->
+<div class="table-wrap">
+  <table class="data-table" id="data-table">
+    <thead id="table-head"></thead>
+    <tbody id="table-body"></tbody>
+  </table>
+</div>
+
+<!-- ═══ Pagination ═══════════════════════════════════ -->
+<div class="pagination" id="pagination"></div>
+
+<!-- ═══ Detail Modal ══════════════════════════════════ -->
+<div id="detail-modal" class="modal-overlay" style="display:none">
+  <div class="modal-box" id="detail-modal-box"></div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════
+   data_table.html — Sortable / Paginable Node/Edge Table
+   ═══════════════════════════════════════════════════════ */
+
+function switchTab(tab) {
+  const mapping = { graph_view: 'graph_view.html', data_table: 'data_table.html', dashboard: 'dashboard.html' };
+  if (mapping[tab]) {
+    // Stay on same page if it's data_table
+    if (tab === 'data_table') return;
+  }
+  window.location.href = mapping[tab] || mapping['graph_view'];
+}
+
+let currentTable = 'nodes';
+let allNodes = [];
+let allEdges = [];
+let filteredData = [];
+let sortKey = 'id';
+let sortDir = 1;
+let currentPage = 1;
+let pageSize = 50;
+let searchQuery = '';
+let typeFilter = '';
+
+/* ── Init ────────────────────────────────────────────────── */
+(async function init() {
+  try {
+    await KG.loadAll();
+    document.getElementById('town-label').textContent = KG.townName || 'Unknown';
+    allNodes = KG.allNodes;
+    allEdges = KG.allEdges.map(e => ({
+      src_id: e.src_id, dst_id: e.dst_id, 关系类型: e.type,
+      first_frame: e.first_frame, last_frame: e.last_frame,
+      confidence: (e.attrs?.confidence != null) ? e.attrs.confidence : '',
+      label: e.attrs?.label || '', layer: e.attrs?.layer || ''
+    }));
+    populateTypeFilter();
+    switchTable('nodes');
+  } catch (e) {
+    document.getElementById('table-body').innerHTML = `<tr><td colspan="10" style="color:var(--red)">❌ 加载失败: ${e.message}</td></tr>`;
+  }
+})();
+
+function populateTypeFilter() {
+  const sel = document.getElementById('type-filter');
+  const nodeTypes = [...new Set(KG.allNodes.map(n => n.type))].sort();
+  const edgeTypes = [...new Set(KG.allEdges.map(e => e.type))].sort();
+  sel.innerHTML = '<option value="">全部</option>' +
+    nodeTypes.map(t => `<option value="${t}">${t}</option>`).join('') +
+    (nodeTypes.length && edgeTypes.length ? '<optgroup label="── 边类型 ──"></optgroup>' : '') +
+    edgeTypes.map(t => `<option value="${t}">${t}</option>`).join('');
+}
+
+/* ── Table switching ───────────────────────────────────────*/
+function switchTable(type) {
+  currentTable = type;
+  currentPage = 1;
+  // Update active tab styling
+  document.querySelectorAll('#table-subtabs a').forEach(a => {
+    a.classList.toggle('active', a.dataset.table === type);
+  });
+  renderTable();
+}
+
+function onTableSearch() {
+  searchQuery = document.getElementById('search-input').value.trim().toLowerCase();
+  currentPage = 1;
+  renderTable();
+}
+
+function onTableFilter() {
+  typeFilter = document.getElementById('type-filter').value;
+  currentPage = 1;
+  renderTable();
+}
+
+function onTableSort() {
+  const val = document.getElementById('sort-select').value;
+  const parts = val.split('_');
+  sortKey = parts[0];
+  sortDir = parts[1] === 'desc' ? -1 : 1;
+  currentPage = 1;
+  renderTable();
+}
+
+function onPageSizeChange() {
+  pageSize = parseInt(document.getElementById('page-size').value) || 50;
+  currentPage = 1;
+  renderTable();
+}
+
+/* ── Filtering ──────────────────────────────────────────── */
+function getFilteredData() {
+  if (currentTable === 'nodes') {
+    let data = allNodes.map(n => {
+      const a = n.attrs || {};
+      return {
+        id: n.id, type: n.type, first_frame: n.first_frame, last_frame: n.last_frame,
+        entity_type: a.entity_type || '', severity_max: a.severity_max ?? '',
+        entity_id: a.entity_id || '', reason_tags: (a.reason_tags || []).join(';')
+      };
+    });
+    if (typeFilter) data = data.filter(d => d.type === typeFilter || d.entity_type === typeFilter);
+    if (searchQuery) data = data.filter(d =>
+      d.id.toLowerCase().includes(searchQuery) ||
+      (d.entity_id || '').toLowerCase().includes(searchQuery)
+    );
+    return data;
+  } else {
+    let data = allEdges.map(e => ({
+      src_id: e.src_id, dst_id: e.dst_id, 关系类型: e.关系类型,
+      first_frame: e.first_frame, last_frame: e.last_frame,
+      confidence: e.confidence, label: e.label, layer: e.layer
+    }));
+    if (typeFilter) data = data.filter(d => d.关系类型 === typeFilter);
+    if (searchQuery) data = data.filter(d =>
+      d.src_id.toLowerCase().includes(searchQuery) ||
+      d.dst_id.toLowerCase().includes(searchQuery)
+    );
+    return data;
+  }
+}
+
+/* ── Sorting ────────────────────────────────────────────── */
+function sortData(data) {
+  const key = sortKey;
+  const dir = sortDir;
+  return [...data].sort((a, b) => {
+    let va = a[key], vb = b[key];
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
+    return String(va).localeCompare(String(vb)) * dir;
+  });
+}
+
+/* ── Rendering ──────────────────────────────────────────── */
+function renderTable() {
+  filteredData = sortData(getFilteredData());
+  const total = filteredData.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (currentPage > totalPages) currentPage = totalPages;
+  const start = (currentPage - 1) * pageSize;
+  const pageData = filteredData.slice(start, start + pageSize);
+
+  // Update count
+  document.getElementById('table-count').textContent = `共 ${total.toLocaleString()} 条，当前显示 ${pageData.length} 条 (第 ${currentPage}/${totalPages} 页)`;
+
+  // Render header
+  const thead = document.getElementById('table-head');
+  if (currentTable === 'nodes') {
+    const cols = ['ID', '类型', 'first_frame', 'last_frame', 'entity_type', 'severity_max', 'entity_id', 'reason_tags'];
+    thead.innerHTML = '<tr>' + cols.map(c => {
+      const icon = sortKey === c.toLowerCase().replace('severity_max', 'severity_max') ? (sortDir === 1 ? ' ▲' : ' ▼') : '';
+      return `<th onclick="setSort('${c.toLowerCase().replace(/_/g, '')}')">${c}<span class="sort-icon">${icon}</span></th>`;
+    }).join('') + '</tr>';
+  } else {
+    const cols = ['src_id', 'dst_id', '关系类型', 'first_frame', 'last_frame', 'confidence', 'label', 'layer'];
+    thead.innerHTML = '<tr>' + cols.map(c => {
+      const sortMap = { '源节点': 'src_id', '目标节点': 'dst_id', '关系类型': '关系类型' };
+      const sk = c.toLowerCase().replace(/关系类型/, '关系类型');
+      const icon = sortKey === sk ? (sortDir === 1 ? ' ▲' : ' ▼') : '';
+      return `<th onclick="setSort('${sk}')">${c}<span class="sort-icon">${icon}</span></th>`;
+    }).join('') + '</tr>';
+  }
+
+  // Render body
+  const tbody = document.getElementById('table-body');
+  tbody.innerHTML = pageData.map((row, i) => {
+    const cols = currentTable === 'nodes' ?
+      [row.id, row.type, row.first_frame, row.last_frame, row.entity_type, row.severity_max, row.entity_id, row.reason_tags] :
+      [row.src_id, row.dst_id, row.关系类型, row.first_frame, row.last_frame, row.confidence, row.label, row.layer];
+    return `<tr onclick="showRowDetail(${i}, '${currentTable}')" title="点击查看详情">
+      ${cols.map(c => `<td>${c == null ? '' : c}</td>`).join('')}
+    </tr>`;
+  }).join('');
+
+  // Render pagination
+  const pag = document.getElementById('pagination');
+  let pagHtml = `<button class="sm" ${currentPage <= 1 ? 'disabled' : ''} onclick="goPage(${currentPage - 1})">◀</button>`;
+  const maxButtons = 7;
+  let pStart = Math.max(1, currentPage - 3), pEnd = Math.min(totalPages, currentPage + 3);
+  if (pStart > 1) { pagHtml += `<button class="sm" onclick="goPage(1)">1</button>`; if (pStart > 2) pagHtml += '<span style="padding:0 4px">...</span>'; }
+  for (let p = pStart; p <= pEnd; p++) {
+    pagHtml += `<button class="sm ${p === currentPage ? 'active' : ''}" onclick="goPage(${p})">${p}</button>`;
+  }
+  if (pEnd < totalPages) { if (pEnd < totalPages - 1) pagHtml += '<span style="padding:0 4px">...</span>'; pagHtml += `<button class="sm" onclick="goPage(${totalPages})">${totalPages}</button>`; }
+  pagHtml += `<button class="sm" ${currentPage >= totalPages ? 'disabled' : ''} onclick="goPage(${currentPage + 1})">▶</button>`;
+  pag.innerHTML = pagHtml;
+}
+
+function setSort(key) {
+  if (sortKey === key) { sortDir *= -1; }
+  else { sortKey = key; sortDir = 1; }
+  const val = sortKey + '_' + (sortDir === 1 ? 'asc' : 'desc');
+  document.getElementById('sort-select').value = val;
+  currentPage = 1;
+  renderTable();
+}
+
+function goPage(p) {
+  const totalPages = Math.ceil(filteredData.length / pageSize) || 1;
+  currentPage = Math.max(1, Math.min(totalPages, p));
+  renderTable();
+}
+
+/* ── CSV Export ─────────────────────────────────────────── */
+function exportCSV() {
+  if (!filteredData.length) return;
+  const cols = currentTable === 'nodes' ?
+    ['id', 'type', 'first_frame', 'last_frame', 'entity_type', 'severity_max', 'entity_id', 'reason_tags'] :
+    ['src_id', 'dst_id', '关系类型', 'first_frame', 'last_frame', 'confidence', 'label', 'layer'];
+  const header = cols.join(',');
+  const rows = filteredData.map(row => cols.map(c => {
+    const v = row[c] ?? '';
+    const s = String(v);
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }).join(','));
+  const csv = header + '\n' + rows.join('\n');
+  KG.downloadCSV(csv, `${currentTable}_export.csv`);
+}
+
+/* ── Row Detail Modal ────────────────────────────────────── */
+function showRowDetail(idx, tableType) {
+  const row = filteredData[idx];
+  if (!row) return;
+  if (tableType === 'nodes') {
+    const n = allNodes.find(nd => nd.id === row.id);
+    if (!n) return;
+    const a = n.attrs || {};
+    let html = `<h3>节点详情: ${n.type}</h3>`;
+    html += `<div class="prop"><span class="k">ID</span><span class="v">${n.id}</span></div>`;
+    html += `<div class="prop"><span class="k">帧范围</span><span class="v">${n.first_frame}~${n.last_frame}</span></div>`;
+    html += `<div class="prop"><span class="k">shard</span><span class="v">${n._shard_idx ?? 'N/A'}</span></div>`;
+    const skip = new Set(['entity_id', 'entity_type', 'first_frame', 'last_frame', 'fired_frames', 'location_x', 'location_y']);
+    for (const [k, v] of Object.entries(a)) {
+      if (skip.has(k) || v === null || v === undefined) continue;
+      let vs = typeof v === 'number' ? (v.toFixed?.call(v, 4) ?? v) : String(v);
+      html += `<div class="prop"><span class="k">${k}</span><span class="v" style="word-break:break-all">${vs}</span></div>`;
+    }
+    // Jump to graph button
+    html += `<div class="modal-actions">
+      <button onclick="closeModal()">关闭</button>
+      <button class="primary" onclick="jumpToNode('${n.id}')">🎯 跳转图谱</button>
+    </div>`;
+    document.getElementById('detail-modal-box').innerHTML = html;
+    document.getElementById('detail-modal').style.display = 'flex';
+  } else {
+    const e = KG.allEdges.find(ed => ed.src_id === row.src_id && ed.dst_id === row.dst_id && ed.type === row.关系类型);
+    let html = `<h3>边详情</h3>`;
+    html += `<div class="prop"><span class="k">源</span><span class="v">${row.src_id}</span></div>`;
+    html += `<div class="prop"><span class="k">目标</span><span class="v">${row.dst_id}</span></div>`;
+    html += `<div class="prop"><span class="k">类型</span><span class="v">${row.关系类型}</span></div>`;
+    html += `<div class="prop"><span class="k">帧范围</span><span class="v">${row.first_frame}~${row.last_frame}</span></div>`;
+    if (e) {
+      const a = e.attrs || {};
+      for (const [k, v] of Object.entries(a)) {
+        if (k === 'fired_frames') continue;
+        let vs = typeof v === 'number' ? (v.toFixed?.call(v, 4) ?? v) : String(v);
+        html += `<div class="prop"><span class="k">${k}</span><span class="v">${vs}</span></div>`;
+      }
+    }
+    html += `<div class="modal-actions">
+      <button onclick="closeModal()">关闭</button>
+      <button class="primary" onclick="jumpToNode('${row.src_id}')">🎯 源节点图谱</button>
+      <button class="primary" onclick="jumpToNode('${row.dst_id}')">🎯 目标节点图谱</button>
+    </div>`;
+    document.getElementById('detail-modal-box').innerHTML = html;
+    document.getElementById('detail-modal').style.display = 'flex';
+  }
+}
+
+function closeModal() {
+  document.getElementById('detail-modal').style.display = 'none';
+}
+
+function jumpToNode(nodeId) {
+  closeModal();
+  switchTab('graph_view');
+  // Navigate to frame where this node is active
+  const node = allNodes.find(n => n.id === nodeId);
+  if (node && node.first_frame !== undefined) {
+    setTimeout(() => {
+      const slider = document.getElementById('frame-slider');
+      if (slider) {
+        slider.value = Math.min(node.first_frame, parseInt(slider.max));
+        KG.currentFrame = parseInt(slider.value);
+        onFrameChange();
+        // Focus the node in the graph
+        if (KG.typeFilter.size > 0) KG.typeFilter.clear();
+        if (node.type) KG.typeFilter.add(node.type);
+        KG.renderFrame();
+      }
+    }, 100);
+  }
+}
+
+// Close modal on overlay click
+document.getElementById('detail-modal')?.addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+}) || (function(){})();
+</script>
+</body>
+</html>
