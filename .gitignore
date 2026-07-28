@@ -36,3 +36,11 @@ Thumbs.db
 # backups
 *.bak.*
 stk/viz/kg_dashboard_ref.py
+exp_results/
+exp_results/
+viz_output/*.html
+viz_output/*.json
+viz_output/*.css
+viz_output/*.js
+viz_output/*.log
+.zcode/
