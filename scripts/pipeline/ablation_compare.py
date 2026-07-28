@@ -292,6 +292,7 @@ def _gen_run_command(
         cmd += ["--time-downsample", str(config.time_downsample)]
 
     # ── 策略 5: 写标识 JSON 让后续识别本跑次是哪个退化体 ──
+    output_dir.mkdir(parents=True, exist_ok=True)  # 确保目录存在
     meta_path = output_dir / "ablation_meta.json"
     meta_path.write_text(json.dumps({
         "config_name": config.name,
@@ -879,6 +880,600 @@ def generate_markdown_report(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# 图表生成（Fig.2-A / Fig.2-B / Fig.5-A~C）
+# ──────────────────────────────────────────────────────────────────────────────
+FIGURES_DIR = OUT_DIR / "figures"
+
+
+def _setup_matplotlib():
+    """配置 matplotlib：Agg 后端（无 GUI）+ 中文 fallback 字体."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    # 尝试中文字体，失败则用 sans-serif
+    try:
+        plt.rcParams["font.sans-serif"] = [
+            "SimHei", "WenQuanYi Micro Hei", "Noto Sans CJK SC",
+            "DejaVu Sans",
+        ]
+        plt.rcParams["axes.unicode_minus"] = False
+    except Exception:
+        pass
+    return plt
+
+
+def generate_figures(
+    tier_results: Dict[str, Any],
+    config_results: Dict[str, Any],
+    degraded_results: Dict[str, Any],
+) -> List[Path]:
+    """生成全部图表 → data/runs/ablation/figures/.
+
+    返回已生成的 PNG 文件列表。
+    """
+    import json as _json
+    plt = _setup_matplotlib()
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    generated: List[Path] = []
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Fig 5-A  Tier A→D 逐层增量贡献（有数据，可直接渲染）
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if tier_results and "tier_data" in tier_results:
+        tiers = tier_results["tier_data"]
+        labels = [f"Tier {t['tier']}" for t in tiers]
+        scenarios = [t["n_scenarios"] for t in tiers]
+        rules = [t["expected_rules"] for t in tiers]
+        svs = [t["expected_sv"] for t in tiers]
+        behaviors = [t["expected_behaviors"] for t in tiers]
+
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), sharey=True)
+        fig.suptitle(
+            "Fig. 5-A: Tier A-D Incremental Contribution "
+            "(Risk Gradient Contribution)",
+            fontsize=13, fontweight="bold", y=1.02,
+        )
+
+        # (a) 规则数
+        ax = axes[0]
+        bars = ax.bar(labels, rules, color=["#81C784", "#FFB74D", "#E57373", "#BA68C8"])
+        for b, v in zip(bars, rules):
+            ax.text(b.get_x() + b.get_width()/2, b.get_height() + 0.15,
+                    str(v), ha="center", fontsize=11, fontweight="bold")
+        ax.set_ylabel("Unique Rule Codes Triggered")
+        ax.set_title("(a) Rule Coverage")
+        ax.set_ylim(0, max(rules) + 2)
+
+        # (b) SafetyViolation 数
+        ax = axes[1]
+        bars = ax.bar(labels, svs, color=["#81C784", "#FFB74D", "#E57373", "#BA68C8"])
+        for b, v in zip(bars, svs):
+            ax.text(b.get_x() + b.get_width()/2, b.get_height() + 0.1,
+                    str(v), ha="center", fontsize=11, fontweight="bold")
+        ax.set_ylabel("Safety Violations Expected")
+        ax.set_title("(b) Violation Count")
+        ax.set_ylim(0, max(svs) + 2)
+
+        # (c) 行为类型数
+        ax = axes[2]
+        bars = ax.bar(labels, behaviors, color=["#81C784", "#FFB74D", "#E57373", "#BA68C8"])
+        for b, v in zip(bars, behaviors):
+            ax.text(b.get_x() + b.get_width()/2, b.get_height() + 0.1,
+                    str(v), ha="center", fontsize=11, fontweight="bold")
+        ax.set_ylabel("Behavior Types Detected")
+        ax.set_title("(c) Behavior Coverage")
+        ax.set_ylim(0, max(behaviors) + 2)
+
+        fig.tight_layout()
+        out = FIGURES_DIR / "fig5a_tier_increment.png"
+        fig.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        generated.append(out)
+        print(f"  [fig] {out.name}")
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Fig 5-B  Tier 逐层累计图谱规模（叠加柱状图）
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if tier_results and "baseline_metrics" in tier_results:
+        baseline = tier_results.get("baseline_metrics", {})
+        total_nodes = baseline.get("node_count", 0)
+        total_edges = baseline.get("edge_count", 0)
+        tiers = tier_results.get("tier_data", [])
+
+        if total_nodes > 0:
+            # 按 tier 比例分配节点/边（简化估算，实际需从 run 数据校准）
+            tier_scenario_counts = [t["n_scenarios"] for t in tiers]
+            total_scenarios = sum(tier_scenario_counts) or 1
+            tier_node_props = [c / total_scenarios for c in tier_scenario_counts]
+            tier_edge_props = [c / total_scenarios for c in tier_scenario_counts]
+            tier_nodes_cum = [int(total_nodes * p) for p in _cumulative(tier_node_props)]
+            tier_edges_cum = [int(total_edges * p) for p in _cumulative(tier_edge_props)]
+
+            labels = [f"Tier {t['tier']}\n(till now)" for t in tiers]
+
+            fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+            fig.suptitle(
+                "Fig. 5-B: Cumulative Graph Scale by Tier "
+                "(Incremental Contribution)",
+                fontsize=13, fontweight="bold", y=1.02,
+            )
+
+            colors_n = ["#81C784", "#FFB74D", "#E57373", "#BA68C8"]
+            colors_e = ["#4DB6AC", "#FFB74D", "#EF5350", "#AB47BC"]
+
+            ax = axes[0]
+            ax.bar(labels, tier_nodes_cum, color=colors_n)
+            for i, v in enumerate(tier_nodes_cum):
+                ax.text(i, v + max(tier_nodes_cum)*0.01, str(v),
+                        ha="center", fontsize=10, fontweight="bold")
+            ax.set_ylabel("Cumulative Nodes")
+            ax.set_title(f"(a) Nodes (total={total_nodes})")
+            ax.set_ylim(0, total_nodes * 1.25)
+
+            ax = axes[1]
+            ax.bar(labels, tier_edges_cum, color=colors_e)
+            for i, v in enumerate(tier_edges_cum):
+                ax.text(i, v + max(tier_edges_cum)*0.01, str(v),
+                        ha="center", fontsize=10, fontweight="bold")
+            ax.set_ylabel("Cumulative Edges")
+            ax.set_title(f"(b) Edges (total={total_edges})")
+            ax.set_ylim(0, total_edges * 1.25)
+
+            fig.tight_layout()
+            out = FIGURES_DIR / "fig5b_tier_cumulative_scale.png"
+            fig.savefig(out, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            generated.append(out)
+            print(f"  [fig] {out.name}")
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Fig 5-C  Node Type 分布饼图（已有 run 数据可渲染）
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if tier_results and "baseline_metrics" in tier_results:
+        node_types = tier_results["baseline_metrics"].get("node_type_counts", {})
+        if node_types:
+            fig, ax = plt.subplots(figsize=(6, 5))
+            labels = [k for k in node_types if node_types[k] > 0]
+            sizes = [node_types[k] for k in labels]
+            colors = plt.cm.Set3([i / len(labels) for i in range(len(labels))])
+            wedges, texts, autotexts = ax.pie(
+                sizes, labels=labels, autopct="%1.0f%%",
+                colors=colors, startangle=140, textprops={"fontsize": 9},
+            )
+            for t in autotexts:
+                t.set_fontsize(8)
+            ax.set_title(
+                "Fig. 5-C: Node Type Distribution (Baseline Run, Town10HD)",
+                fontsize=12, fontweight="bold",
+            )
+            fig.tight_layout()
+            out = FIGURES_DIR / "fig5c_node_type_distribution.png"
+            fig.savefig(out, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            generated.append(out)
+            print(f"  [fig] {out.name}")
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Fig 5-D  Edge Type 分布水平柱状图
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if tier_results and "baseline_metrics" in tier_results:
+        edge_types = tier_results["baseline_metrics"].get("edge_type_counts", {})
+        if edge_types:
+            sorted_edges = sorted(edge_types.items(), key=lambda kv: kv[1])
+            labels = [k for k, _ in sorted_edges]
+            values = [v for _, v in sorted_edges]
+            colors = plt.cm.viridis([v / max(values) for v in values])
+
+            fig, ax = plt.subplots(figsize=(8, max(4, len(labels) * 0.38)))
+            bars = ax.barh(labels, values, color=colors, edgecolor="white", linewidth=0.5)
+            for b, v in zip(bars, values):
+                ax.text(b.get_width() + max(values)*0.01, b.get_y() + b.get_height()/2,
+                        str(v), va="center", fontsize=9, fontweight="bold")
+            ax.set_xlabel("Count")
+            ax.set_title(
+                "Fig. 5-D: Edge Type Distribution (Baseline Run, Town10HD)",
+                fontsize=12, fontweight="bold",
+            )
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            fig.tight_layout()
+            out = FIGURES_DIR / "fig5d_edge_type_distribution.png"
+            fig.savefig(out, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            generated.append(out)
+            print(f"  [fig] {out.name}")
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Fig 2-A  Importance Threshold 稀疏度-F1 曲线（CFG-2，等待数据）
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    _try_render_cfg2_fig(plt, config_results, generated)
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Fig 2-B  阈值灵敏度热力图（CFG-6，等待数据）
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    _try_render_cfg6_fig(plt, config_results, generated)
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Fig 2-C  退化体对比雷达图（DG-A~F，等待数据）
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    _try_render_degraded_radar(plt, degraded_results, generated)
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Fig 2-D  Config Scan 各因子 FPS 汇总（CFG-1/3/4/5，等待数据）
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    _try_render_fps_comparison(plt, config_results, generated)
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Fig 2-E  CFG-3 exclude_lanes 节点/边对比（等待数据）
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    _try_render_cfg3_fig(plt, config_results, generated)
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 占位图：任何没有数据的图表都生成一个标注"awaiting data"的占位 PNG
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    _render_pending_figures(plt, generated)
+
+    print(f"\n  [fig] Total figures generated: {len(generated)}")
+    return generated
+
+
+def _cumulative(values: List[float]) -> List[float]:
+    """返回累计和序列。"""
+    result = []
+    s = 0.0
+    for v in values:
+        s += v
+        result.append(s)
+    return result
+
+
+# ─── CFG-2: 重要性阈值扫描 → Fig.2-A ───────────────────────────────────────
+def _try_render_cfg2_fig(plt, config_results: Dict, generated: List[Path]):
+    """如果 CFG-2 跑出了 node_cull_rate / behavior_f1 数据，绘制 Fig.2-A。"""
+    cfg2_path = OUT_DIR / "config_CFG-2" / "scan_results.json"
+    if not cfg2_path.exists():
+        return
+    try:
+        data = json.loads(cfg2_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    scan_results = data.get("results", [])
+    if not scan_results:
+        return
+
+    thresholds = [r["value"] for r in scan_results]
+    cull_rates = [r.get("node_cull_rate", 0) for r in scan_results]
+    f1_scores = [r.get("behavior_f1", 0) for r in scan_results]
+
+    fig, ax1 = plt.subplots(figsize=(7, 4.5))
+    color1 = "#1976D2"
+    color2 = "#E53935"
+
+    ax1.plot(thresholds, cull_rates, "o-", color=color1, linewidth=2, label="Node Cull Rate")
+    ax1.set_xlabel("importance_threshold")
+    ax1.set_ylabel("Node Cull Rate", color=color1)
+    ax1.tick_params(axis="y", labelcolor=color1)
+
+    ax2 = ax1.twinx()
+    ax2.plot(thresholds, f1_scores, "s--", color=color2, linewidth=2, label="Behavior F1")
+    ax2.set_ylabel("Behavior F1", color=color2)
+    ax2.tick_params(axis="y", labelcolor=color2)
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="center right")
+
+    ax1.set_title(
+        "Fig. 2-A: Node Cull Rate vs Behavior F1 "
+        "at Different importance_threshold (CFG-2)",
+        fontsize=12, fontweight="bold",
+    )
+    ax1.grid(True, alpha=0.3)
+    fig.tight_layout()
+    out = FIGURES_DIR / "fig2a_importance_threshold_sensitivity.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    generated.append(out)
+    print(f"  [fig] {out.name} (from scan results)")
+
+
+# ─── CFG-6: 阈值灵敏度热力图 → Fig.2-B ────────────────────────────────────
+def _try_render_cfg6_fig(plt, config_results: Dict, generated: List[Path]):
+    """如果 CFG-6 跑出了 behavior_f1 / rule_dr 数据，绘制 Fig.2-B 热力图。"""
+    cfg6_path = OUT_DIR / "config_CFG-6" / "scan_results.json"
+    if not cfg6_path.exists():
+        return
+    try:
+        data = json.loads(cfg6_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    scan_results = data.get("results", [])
+    if not scan_results:
+        return
+
+    # 解析为 (ttc_critical, pedestrian_distance) -> value 矩阵
+    ttc_vals = sorted(set(r["value"][0] for r in scan_results))
+    ped_vals = sorted(set(r["value"][1] for r in scan_results))
+    if not ttc_vals or not ped_vals:
+        return
+
+    grid_f1 = [[0.0]*len(ped_vals) for _ in ttc_vals]
+    grid_dr = [[0.0]*len(ped_vals) for _ in ttc_vals]
+
+    for r in scan_results:
+        ttc, ped = r["value"]
+        ti = ttc_vals.index(ttc)
+        pi = ped_vals.index(ped)
+        grid_f1[ti][pi] = r.get("behavior_f1", 0)
+        grid_dr[ti][pi] = r.get("rule_dr", 0)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    fig.suptitle(
+        "Fig. 2-B: Threshold Sensitivity Heatmap (CFG-6)",
+        fontsize=13, fontweight="bold", y=1.02,
+    )
+
+    import numpy as np
+
+    for ax, mat, title, cmap in [
+        (axes[0], grid_f1, "(a) Behavior F1", "YlOrRd"),
+        (axes[1], grid_dr, "(b) Rule Detection Rate", "YlGnBu"),
+    ]:
+        arr = np.array(mat, dtype=float)
+        im = ax.imshow(arr, cmap=cmap, aspect="auto")
+        ax.set_xticks(range(len(ped_vals)))
+        ax.set_xticklabels([f"{v:.0f}" for v in ped_vals], fontsize=9)
+        ax.set_yticks(range(len(ttc_vals)))
+        ax.set_yticklabels([f"{v:.1f}" for v in ttc_vals], fontsize=9)
+        ax.set_xlabel("pedestrian_distance (m)")
+        ax.set_ylabel("ttc_critical (s)")
+        ax.set_title(title, fontsize=11)
+        # 标注数值
+        for i in range(len(ttc_vals)):
+            for j in range(len(ped_vals)):
+                val = arr[i, j]
+                txt_color = "white" if val > (arr.max() * 0.6) else "black"
+                ax.text(j, i, f"{val:.2f}", ha="center", va="center",
+                        fontsize=8, color=txt_color, fontweight="bold")
+        fig.colorbar(im, ax=ax, shrink=0.75)
+
+    fig.tight_layout()
+    out = FIGURES_DIR / "fig2b_threshold_sensitivity_heatmap.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    generated.append(out)
+    print(f"  [fig] {out.name} (from scan results)")
+
+
+# ─── 退化体雷达图 → Fig.2-C ─────────────────────────────────────────────────
+def _try_render_degraded_radar(plt, degraded_results: Dict, generated: List[Path]):
+    """如果 DG-A~F 跑出了 node_count / edge_count / violation_count 等数据，绘制雷达图。"""
+    # 检查是否有任意一个 DG 有实际指标数据
+    has_data = False
+    for dg_id in DEGRADED_CONFIGS:
+        res = degraded_results.get(dg_id, {})
+        if isinstance(res, dict) and "node_count" in res:
+            has_data = True
+            break
+    if not has_data:
+        return
+
+    import numpy as np
+
+    # 雷达维度
+    dims = ["Nodes", "Edges", "AvgDegree", "Violations", "Maneuvers"]
+    dim_keys = ["node_count", "edge_count", "avg_degree", "violation_count", "maneuver_count"]
+    n_dims = len(dims)
+    angles = [i / n_dims * 2 * np.pi for i in range(n_dims)]
+    angles += angles[:1]
+
+    fig, ax = plt.subplots(figsize=(7, 7), subplot_kw=dict(polar=True))
+    fig.suptitle(
+        "Fig. 2-C: Degraded STKG Capability Radar",
+        fontsize=13, fontweight="bold", y=1.04,
+    )
+
+    colors = ["#1976D2", "#E53935", "#43A047", "#FB8C00", "#8E24AA", "#00ACC1"]
+    baseline_vals = [1.0] * n_dims  # baseline 归一化为 1.0
+
+    for i, (dg_id, dg_cfg) in enumerate(DEGRADED_CONFIGS.items()):
+        res = degraded_results.get(dg_id, {})
+        if not isinstance(res, dict) or "node_count" not in res:
+            continue
+        vals = [res.get(k, 0) for k in dim_keys]
+        # 与 baseline（完整 STKG）做归一化
+        baseline = degraded_results.get("DG-baseline", {})
+        if baseline:
+            max_vals = [max(baseline.get(k, 1), 1) for k in dim_keys]
+        else:
+            max_vals = [max(v, 1) for v in vals] or [1] * n_dims
+        norm = [vals[j] / max_vals[j] for j in range(n_dims)]
+        norm += norm[:1]
+        ax.plot(angles, norm, "o-", linewidth=1.5, label=dg_cfg.label,
+                color=colors[i % len(colors)])
+        ax.fill(angles, norm, alpha=0.08, color=colors[i % len(colors)])
+
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(dims, fontsize=9)
+    ax.set_ylim(0, 1.5)
+    ax.set_title("Relative Capability (normalized to full STKG=1.0)",
+                 fontsize=10, pad=20)
+    ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1), fontsize=9)
+    fig.tight_layout()
+    out = FIGURES_DIR / "fig2c_degraded_radar.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    generated.append(out)
+    print(f"  [fig] {out.name}")
+
+
+# ─── Config Scan FPS 汇总 → Fig.2-D ────────────────────────────────────────
+def _try_render_fps_comparison(plt, config_results: Dict, generated: List[Path]):
+    """从 CFG-1/3/4/5 的 scan_results.json 读 FPS 数据，绘制对比柱状图。"""
+    scan_ids = ["CFG-1", "CFG-3", "CFG-4", "CFG-5"]
+    factor_labels = {
+        "CFG-1": "legacy_full_pairing",
+        "CFG-3": "exclude_lanes",
+        "CFG-4": "filter_behavior_det",
+        "CFG-5": "filter_scene_spatial",
+    }
+    fps_groups: Dict[str, Dict[str, float]] = {}
+    for sid in scan_ids:
+        scan_path = OUT_DIR / f"config_{sid}" / "scan_results.json"
+        if not scan_path.exists():
+            continue
+        try:
+            data = json.loads(scan_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        results = data.get("results", [])
+        if not results:
+            continue
+        label = factor_labels.get(sid, sid)
+        fps_groups[label] = {
+            str(r["value"]): r.get("fps", 0) for r in results
+        }
+
+    if not fps_groups:
+        return
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    factor_names = list(fps_groups.keys())
+    n_factors = len(factor_names)
+    all_vals = set()
+    for fps in fps_groups.values():
+        all_vals.update(fps.keys())
+    val_labels = sorted(all_vals)
+    n_vals = len(val_labels)
+
+    bar_width = 0.7 / max(n_vals, 1)
+    x = np.arange(n_factors)  # noqa: F821
+
+    import numpy as np
+    colors = plt.cm.Set2([i / max(n_vals, 1) for i in range(n_vals)])
+
+    for j, val in enumerate(val_labels):
+        heights = [fps_groups[f].get(val, 0) for f in factor_names]
+        offset = (j - n_vals / 2 + 0.5) * bar_width
+        ax.bar(x + offset, heights, bar_width, label=f"{val}", color=colors[j])
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(factor_names, fontsize=9)
+    ax.set_ylabel("FPS (frames/sec)")
+    ax.set_title("Fig. 2-D: FPS by Config Factor (CFG-1/3/4/5)", fontsize=12, fontweight="bold")
+    ax.legend(title="Factor Value", fontsize=8)
+    ax.grid(True, axis="y", alpha=0.3)
+    fig.tight_layout()
+    out = FIGURES_DIR / "fig2d_fps_by_config.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    generated.append(out)
+    print(f"  [fig] {out.name}")
+
+
+# ─── CFG-3 节点/边对比 → Fig.2-E ───────────────────────────────────────────
+def _try_render_cfg3_fig(plt, config_results: Dict, generated: List[Path]):
+    """从 CFG-3 scan_results.json 读节点/边数，绘制分组柱状图。"""
+    cfg3_path = OUT_DIR / "config_CFG-3" / "scan_results.json"
+    if not cfg3_path.exists():
+        return
+    try:
+        data = json.loads(cfg3_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    results = data.get("results", [])
+    if not results:
+        return
+
+    labels = [f"exclude_lanes={r['value']}" for r in results]
+    nodes = [r.get("node_count", 0) for r in results]
+    edges = [r.get("edge_count", 0) for r in results]
+
+    fig, axes = plt.subplots(1, 2, figsize=(9, 4.5))
+    fig.suptitle(
+        "Fig. 2-E: exclude_lanes Ablation (CFG-3)",
+        fontsize=13, fontweight="bold", y=1.02,
+    )
+
+    ax = axes[0]
+    bars = ax.bar(labels, nodes, color=["#43A047", "#E53935"])
+    for b, v in zip(bars, nodes):
+        ax.text(b.get_x() + b.get_width()/2, b.get_height() + max(nodes)*0.02,
+                str(v), ha="center", fontsize=10, fontweight="bold")
+    ax.set_ylabel("Node Count")
+    ax.set_title("(a) Nodes")
+    ax.set_ylim(0, max(nodes) * 1.3)
+
+    ax = axes[1]
+    bars = ax.bar(labels, edges, color=["#43A047", "#E53935"])
+    for b, v in zip(bars, edges):
+        ax.text(b.get_x() + b.get_width()/2, b.get_height() + max(edges)*0.02,
+                str(v), ha="center", fontsize=10, fontweight="bold")
+    ax.set_ylabel("Edge Count")
+    ax.set_title("(b) Edges")
+    ax.set_ylim(0, max(edges) * 1.3)
+
+    fig.tight_layout()
+    out = FIGURES_DIR / "fig2e_exclude_lanes_ablation.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    generated.append(out)
+    print(f"  [fig] {out.name}")
+
+
+# ─── 占位图：等待数据的图表 ─────────────────────────────────────────────────
+_PLACEHOLDER_SPECS = [
+    ("fig2a_pending.png",
+     "Fig. 2-A: Importance Threshold Sensitivity\n(awaiting CFG-2 online data)"),
+    ("fig2b_pending.png",
+     "Fig. 2-B: Threshold Sensitivity Heatmap\n(awaiting CFG-6 online data)"),
+    ("fig2c_pending.png",
+     "Fig. 2-C: Degraded STKG Radar\n(awaiting DG-A~F online data)"),
+    ("fig2d_pending.png",
+     "Fig. 2-D: FPS by Config Factor\n(awaiting CFG-1/3/4/5 online data)"),
+    ("fig2e_pending.png",
+     "Fig. 2-E: exclude_lanes Ablation\n(awaiting CFG-3 online data)"),
+]
+
+
+def _render_pending_figures(plt, generated: List[Path]):
+    """为尚未生成的图表生成标注 'awaiting data' 的占位 PNG。"""
+    existing_names = {p.name for p in generated}
+    for fname, title in _PLACEHOLDER_SPECS:
+        # 如果同名正式图已生成，跳过占位图
+        real_name = fname.replace("_pending.png", ".png")
+        if fname in existing_names or real_name in existing_names:
+            continue
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.text(
+            0.5, 0.55, title,
+            transform=ax.transAxes,
+            ha="center", va="center",
+            fontsize=13, fontweight="bold",
+            color="#999999",
+        )
+        ax.text(
+            0.5, 0.38,
+            "Run: --mode online --scans CFG-X   or   --degraded DG-X",
+            transform=ax.transAxes,
+            ha="center", va="center",
+            fontsize=9, color="#BBBBBB", style="italic",
+        )
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+        ax.set_facecolor("#F5F5F5")
+        fig.patch.set_facecolor("#F5F5F5")
+        out = FIGURES_DIR / fname
+        fig.savefig(out, dpi=100, bbox_inches="tight", facecolor=fig.get_facecolor())
+        plt.close(fig)
+        generated.append(out)
+        print(f"  [fig] {out.name} (placeholder)")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 主入口
 # ──────────────────────────────────────────────────────────────────────────────
 def main():
@@ -979,6 +1574,20 @@ def main():
         report_path = OUT_DIR / "ablation_summary.md"
         report_path.write_text(report, encoding="utf-8")
         print(f"\n[ablation] Report → {report_path}")
+
+        # ── 生成图表 ──
+        try:
+            figs = generate_figures(
+                tier_results=tier_results,
+                config_results=config_results,
+                degraded_results=degraded_results,
+            )
+            if figs:
+                print(f"\n[ablation] Figures → {FIGURES_DIR}")
+        except ImportError as e:
+            print(f"[warn] matplotlib not available, skip figure generation: {e}")
+        except Exception as e:
+            print(f"[warn] figure generation failed: {e}")
 
     # ── dry-run: 打印所有需要运行的内容 ──
     if args.dry_run:

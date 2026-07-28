@@ -11,6 +11,13 @@
 | 5 | pipeline.py args 未定义 bug 修复 | ✅ 完成 | 3 处修改 (函数签名/函数体/调用处) |
 | 6 | 5 地图图谱构建 (Phase2→5) | ✅ 完成 | 223k nodes, 2.4M edges, 5 × phase5_graph.json |
 | 7 | 5 地图可视化分片 + 增强版 HTML | ✅ 完成 | 12 shards × 5 + 11 个交互版块 |
+| 8 | `auto_label_rule_codes.py` — 41,150 行 frame_labels.csv rule_codes 真标注 | ✅ 完成 | `rule_label_stats.json` (13 个规则码 / 23,440 hit / 14,676 标注帧) |
+| 9 | `fill_chapter6_real_data.py` — chapter6 真实 rule_codes 分布写入 | ✅ 完成 | chapter6_01.md 表 6-1 注释 / 表 6-3 / 表 6-3 续 (均为真实数据) |
+| 10 | RQ1/RQ2 多场景训练脚本 `exp_multiscenario.py` + 异常注入 | 🔄 进行中 | `exp_results/rq1/`, `exp_results/rq2/` (Stage I F1=0.564 待 Stage II) |
+| 11 | `augment_viz_stats.py` + `viz_guide.md` + `.gitignore` | ✅ 完成 | 多页可视化系统 5 towns × 6 文件 |
+| 12 | `ablation_compare.py` 多模型消融对比脚本 | ✅ 完成 | K-HSTGAN / RE-GCN / GDN / 纯规则 6 路 F1/PR-AUC 对比 |
+| 13 | `stk/dataset/` 离线数据模块 (`real_data_loader.py`, `csv_snapshot_builder.py`) | ✅ 完成 | 数据集加载 / CSV 快照构建工具 |
+| 14 | RQ1.5 横向图谱对比 + RQ2.6 配置消融 (实验方案占位) | ⏳ 待做 | PLAN_thesis_and_paper.md §4.3.1 / §4.6 |
 
 ## 1. 采集参数与策略
 
@@ -391,3 +398,146 @@ exp_results/
   summary.json             全局实验摘要
 ```
 
+
+## 10. 第 6 章真实数据填充 — rule_codes 自动标注 + chapter6 回填 (2026-07-28)
+
+### 10.1 背景
+
+第 6 章草稿 (chapter6_01.md) 中表 6-1 / 表 6-2 / 表 6-3 / 表 6-3 续 / 表 6-4 ~ 6-18 全部为
+PLAN 文档的"预估合理预期值"，非真实跑出的数据。本章工作先把**纯离线可计算**的表 6-1 注释段、
+表 6-3 (rule_codes 分布)、表 6-3 续 (scenario_rule_dist) 用真实统计填入，对应 §4.3 RQ1.3 中
+"数据来源拆分"的前置标注工序。
+
+### 10.2 `scripts/pipeline/auto_label_rule_codes.py` (新交付)
+
+**作用**：为 `data/dataset/frame_labels.csv` (41,150 行) 的 `rule_codes` 列填充 ground truth。
+
+**三段填充逻辑** (优先级从高到低)：
+
+1. 场景库帧 (`scenario_id = S00~S33`) → `SCENARIO_REGISTRY[sid].expected_rules`
+2. 长时运行异常帧 (有 `anomaly_type`，无 `scenario_id`) → `ANOMALY_RULE_MAP`：
+   - `sudd_brk → RSS_R13a`
+   - `jun_ny → R7`
+   - `rev_drive → R4, R18`
+   - `obs_blk → R8`
+   - `avd_col → RSS_R13a, RSS_R14a`
+   - `sudd_stp → R13, RSS_R13a`
+3. 正常帧 → `rule_codes` 保持为空字符串
+
+**输出**：
+- 原地覆写 `data/dataset/frame_labels.csv` (备份到 `.csv.bak`)
+- 写出 `data/dataset/rule_label_stats.json` 汇总统计
+
+**真实统计结果**：
+
+| 来源 | 帧数 | 占比 |
+|------|------|------|
+| 场景库帧 (scenario_id) | 9,750 | 23.7% |
+| 长时异常帧 (anomaly_type) | 4,926 | 12.0% |
+| 正常帧 (空标注) | 26,474 | 64.3% |
+| **标注合计** | **14,676** | **35.7%** |
+
+`rule_code_dist` (规则码出现次数, 双触发帧被多计)：
+
+| 规则码 | 中文 | 子层 | 出现次数 | 占总 *hit* 比 |
+|--------|------|------|:---:|:---:|
+| RSS_R13a | 纵向安全距离 | RSS | 5,342 | 22.8% |
+| R7 | 路口未让行 | 交规 | 3,709 | 15.8% |
+| R8 | 弱势参与者保护 | 交规 | 3,211 | 13.7% |
+| R1 | 行人优先 | 交规 | 2,250 | 9.6% |
+| R4 | 对向会车违规 | 交规 | 1,664 | 7.1% |
+| R17 | 不按规定车道 | 交规 | 1,500 | 6.4% |
+| RSS_R14a | 横向安全距离 | RSS | 1,250 | 5.3% |
+| R18 | 逆行车道 | 交规 | 914 | 3.9% |
+| R2 | 闯红灯 | 交规 | 750 | 3.2% |
+| RSS_R15a | 横向危险状态 | RSS | 750 | 3.2% |
+| R11 | 恶劣天气限速 | 交规 | 750 | 3.2% |
+| R14 | 违反交通标志 | 交规 | 750 | 3.2% |
+| R13 | 违法停车 | 交规 | 600 | 2.6% |
+| **合计** | — | — | **23,440** | **100.0%** |
+
+(总标注帧数 14,676 与总 hit 数 23,440 的差异来自一帧可同时触发多条规则 — 如 `sudd_stp` 帧
+被同时标 `R13 + RSS_R13a`。)
+
+**运行方式**：
+```bash
+python3 scripts/pipeline/auto_label_rule_codes.py --dry-run    # 预览
+python3 scripts/pipeline/auto_label_rule_codes.py              # 写回 csv + 输出 stats.json
+```
+
+### 10.3 `scripts/pipeline/fill_chapter6_real_data.py` (新交付)
+
+**作用**：从 `data/dataset/rule_label_stats.json` 与 `frame_labels.csv` 读取真实数据，复算统计
+后写入 `docs/thesis/chapter6_01.md` 中以下三个 `<!-- REAL_FILL:xxx -->` 标记包围的区块：
+
+1. `dataset_summary` (line ~39) — 表 6-1 数据集统计注释 (9750 / 4926 / 26474 三行 + 14676 / 35.7%)
+2. `rule_code_dist` (line ~112) — 表 6-3 完整 13 行规则码 + 合计 (23,440 / 100.0%)
+3. `scenario_rule_dist` (line ~132) — 表 6-3 续 14 场景 → 9750 帧 100% 标注
+
+**修正点**：本次会话修了百分比分母语义 — 旧版用 `total_labeled` (14676 标注帧数) 作分母导致
+各行相加 = 159.7%；改为 `total_hits` (23,440 规则码总出现次数) 作分母后行加恰为 100.0%，
+与表 6-2 异常类型分布 "占比" 列保持同一语义。
+
+**幂等性**：脚本仅在 `REAL_FILL` 标记之间替换内容，再次运行可覆盖更新；写入前自动备份到
+`chapter6_01.md.bak.real`。
+
+**运行方式**：
+```bash
+python3 scripts/pipeline/fill_chapter6_real_data.py --dry-run    # 预览
+python3 scripts/pipeline/fill_chapter6_real_data.py              # 写入 (自动 .bak.real 备份)
+python3 scripts/pipeline/fill_chapter6_real_data.py --output docs/thesis/chapter6_01_test.md
+```
+
+### 10.4 `stk/dataset/` (新交付)
+
+为离线实验脚本提供统一数据加载入口：
+
+- `real_data_loader.py` (8.2 KB) — 真实采集数据加载器
+  (加载 `data/dataset/frame_labels.csv`, `frame_actors.csv`, `event_labels.json` 等)
+- `csv_snapshot_builder.py` (24 KB) — STKG 快照 → CSV 工具，支持规则码 / 行为标 / 节点边导出
+- `__init__.py` — 模块入口
+
+### 10.5 第 6 章进度总览（截至 2026-07-28）
+
+| 表号 | 内容 | 真实性 |
+|------|------|--------|
+| 6-1 数据集统计 | 41,150 帧总览 + 注释 | ✅ 真实 (10.3 写入) |
+| 6-2 异常注入类型 | 6 类 4,926 次 | ✅ 真实 (来自 anomaly_log.json) |
+| 6-3 规则码分布 | 13 行 / 23,440 hits / 100.0% | ✅ 真实 (10.3 写入) |
+| 6-3 续 场景库预期规则 | 14 场景 / 9,750 帧 / 100% | ✅ 真实 (10.3 写入) |
+| 6-4 场景关系 F1 (15 关系 × 4 指标) | 平均 F1=98.7% | ⏳ 预估 (待 CARLA GT 比对) |
+| 6-5 行为检测 F1 (11 行为) | 平均 F1=95.3% | ⏳ 预估 (待行为 GT 脚本) |
+| 6-6 规则检出 DR/FAR (17 条规则) | 平均 DR=93.8% / FAR=1.6% | ⏳ 预估 (RuleEnforcer × frame_labels.csv 离线可跑) |
+| 6-7 属性保真度 MAE/RMSE | MAE<0.15 | ⏳ 预估 (帧级抽样比对) |
+| 6-8 ~ 6-11 RQ2 性能 / 内存 / 长时 / 消融 | 2 ms / 500 FPS / 4.3× | ⏳ 预估 (pipeline 加 perf_counter) |
+| 6-12 数据集划分 | 25,886 / 11,012 / 4,252 | ✅ 真实 (dataset_index.json) |
+| 6-13 K-HSTGAN 主结果 | F1=93.0% | ⏳ 预估 (Stage I 实测 0.564 待 Stage II) |
+| 6-14 长时 F1 稳定性 | 方差 0.5% | ⏳ 预估 (20 min 连续) |
+| 6-15 KS-NBCF 融合消融 | K=0.12 | ⏳ 预估 (实测 K=0.166) |
+| 6-16 / 6-17 可解释性人工评审 | 4.43 / 5.0 | ⏳ 预估 (50 帧评审) |
+| 6-18 3 地图交叉验证 | F1=92.4% / σ=0.8% | ⏳ 预估 (3 组训练) |
+
+### 10.6 下一步优先级
+
+1. **RuleEnforcer × frame_labels.csv 离线跑** (RQ1.3 / 表 6-6 真实化) — 半天工程，纯离线即可
+2. **K-HSTGAN Stage II 联合训练** (RQ3 / 表 6-13 真实化) — 当前 Stage I F1=0.564 远低于论文预估 0.93
+3. **RQ2 计时器接入** pipeline.py 各阶段加 `time.perf_counter()`（表 6-8/9/10/11 真实化）— 半天
+4. RQ1.1 / RQ1.2 CARLA GT 自动比对脚本 — 1 周 (需 CARLA 在线)
+5. RQ1.4 属性抽样 MAE/RMSE — 半天
+6. RQ5 可解释性 50 帧人工评审 — 1 周
+
+### 10.7 本次提交清单
+
+| 文件 | 状态 | 内容 |
+|------|------|------|
+| `scripts/pipeline/auto_label_rule_codes.py` | 新增 | rule_codes 自动标注 |
+| `scripts/pipeline/fill_chapter6_real_data.py` | 新增 | 真实数据回填脚本 (已修正百分比语义) |
+| `scripts/pipeline/ablation_compare.py` | 修改 | 6 路消融对比 |
+| `scripts/long_run/exp_realdata.py` | 新增 | 真实数据集长时运行入口 |
+| `scripts/viz/augment_viz_stats.py` | 新增 | 可视化统计增强 |
+| `stk/dataset/real_data_loader.py` | 新增 | 数据加载 |
+| `stk/dataset/csv_snapshot_builder.py` | 新增 | CSV 快照构建 |
+| `stk/dataset/__init__.py` | 新增 | 模块入口 |
+| `docs/thesis/chapter6_01.md` | 新增 | 第 6 章草稿 + 真实数据已填 (545 行) |
+| `docs/viz_guide.md` | 新增 | 可视化使用手册 |
+| `docs/work_record.md` | 修改 | 任务清单 +1~7 → +1~14 + 本节 §10 |
