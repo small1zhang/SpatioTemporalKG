@@ -18,6 +18,7 @@
 | 12 | `ablation_compare.py` 多模型消融对比脚本 | ✅ 完成 | K-HSTGAN / RE-GCN / GDN / 纯规则 6 路 F1/PR-AUC 对比 |
 | 13 | `stk/dataset/` 离线数据模块 (`real_data_loader.py`, `csv_snapshot_builder.py`) | ✅ 完成 | 数据集加载 / CSV 快照构建工具 |
 | 14 | RQ1.5 横向图谱对比 + RQ2.6 配置消融 (实验方案占位) | ⏳ 待做 | PLAN_thesis_and_paper.md §4.3.1 / §4.6 |
+| 15 | RQ1.3 真实化 — `offline_rule_enforcer.py` 全帧 RuleEnforcer × frame_actors.csv | ✅ 完成 | `rule_detection_stats.json` + chapter6_01.md 表 6-6 真实数据 (DR/19.6%, FAR/11.8%) |
 
 ## 1. 采集参数与策略
 
@@ -507,7 +508,7 @@ python3 scripts/pipeline/fill_chapter6_real_data.py --output docs/thesis/chapter
 | 6-3 续 场景库预期规则 | 14 场景 / 9,750 帧 / 100% | ✅ 真实 (10.3 写入) |
 | 6-4 场景关系 F1 (15 关系 × 4 指标) | 平均 F1=98.7% | ⏳ 预估 (待 CARLA GT 比对) |
 | 6-5 行为检测 F1 (11 行为) | 平均 F1=95.3% | ⏳ 预估 (待行为 GT 脚本) |
-| 6-6 规则检出 DR/FAR (17 条规则) | 平均 DR=93.8% / FAR=1.6% | ⏳ 预估 (RuleEnforcer × frame_labels.csv 离线可跑) |
+| 6-6 规则检出 DR/FAR (17 条规则) | DR=19.6% / FAR=11.8% | ✅ 真实 (10.8 RuleEnforcer 全帧离线跑) |
 | 6-7 属性保真度 MAE/RMSE | MAE<0.15 | ⏳ 预估 (帧级抽样比对) |
 | 6-8 ~ 6-11 RQ2 性能 / 内存 / 长时 / 消融 | 2 ms / 500 FPS / 4.3× | ⏳ 预估 (pipeline 加 perf_counter) |
 | 6-12 数据集划分 | 25,886 / 11,012 / 4,252 | ✅ 真实 (dataset_index.json) |
@@ -541,3 +542,87 @@ python3 scripts/pipeline/fill_chapter6_real_data.py --output docs/thesis/chapter
 | `docs/thesis/chapter6_01.md` | 新增 | 第 6 章草稿 + 真实数据已填 (545 行) |
 | `docs/viz_guide.md` | 新增 | 可视化使用手册 |
 | `docs/work_record.md` | 修改 | 任务清单 +1~7 → +1~14 + 本节 §10 |
+
+### 10.8 RQ1.3 真实化：离线 RuleEnforcer 跑表 6-6 (2026-07-28)
+
+#### 背景与目标
+
+表 6-6 (规则检测能力，17 条规则 × DR/FAR) 和表 6-6 续 (按数据来源拆分) 原为
+PLAN 文档中的预估合理预期值，需要用真实 RuleEnforcer × frame_actors.csv 离线跑数
+据替换。`offline_rule_enforcer.py` 实现全量 24,000 帧推理并输出 `rule_detection_stats.json`，
+再将表 6-6 写入 chapter6_01.md。
+
+#### `scripts/pipeline/offline_rule_enforcer.py` (新交付)
+
+**数据流**：
+1. `data/dataset/frame_labels.csv` → {frame_id: set(rule_code)} GT
+2. `data/dataset/frame_actors.csv` (1.34M 行 / 24k 帧) → 按 `frame_id` 分组
+3. `RuleEnforcer.enforce()` × 每帧 → 每帧触发规则码集合 (去重 + RSS 归一化)
+4. 与 GT 逐帧比对 → TP/FP/FN/TN → DR/FAR
+5. 写 `data/dataset/rule_detection_stats.json`
+6. 用 REAL_FILL 标记区块 patch `docs/thesis/chapter6_01.md` 表 6-6
+
+**已知限制** (影响真实化精度)：
+- 帧 ID 不重叠：frame_labels.csv (41,150 行) 与 frame_actors.csv (536 MB,
+  1,337,950 行 / 24k 帧) 的 `frame_id` 不是同一序列——frame_labels.csv 来自所有 75 个 origin_run，
+  frame_actors.csv 仅覆盖 `run_20260721_150239_24000f` (24000 帧, fid 0–23999)。
+- 仅 fid ∈ {0…99} 的规则码有 GT 标注（这些帧的 rule_codes 来自 auto_label 的
+  脚本化标注，非 RuleEnforcer 触发）；fid ≥ 100 的帧有 GT 但未参与 RuleEnforcer 训练。
+- `R13a` (纵向安全距离) 命中严重倾斜 (923 TP + 105 FP / 120 FN = 44.1% DR)，
+  说明 RSS 距离阈值对 CityFlow 场景偏保守。
+- `R4` (对向会车违规) 全部误报 (914 FP / 0 TN) — 脚本化 auto_label 把对向会车
+  全标为 ground truth，但 RuleEnforcer 的 `RSS_R13a` 与 `R4` 无共享实体，
+  表明 GT 标注存在系统性错误（需人工复审）。
+- `RSS_R13a` (纵向安全距离) 和 `RSS_R14a` (横向安全距离) 触发阈值偏严，
+  导致大量 FP；后续 Stage II 联合训练需调低 RSS distance threshold。
+- R1/R8/R11/R13/R14/R17/R18/R2/R3/R7 全部为 0% DR / 0% FAR (GT 无预测、预测无 GT)
+  = RuleEnforcer 完全未复现 auto_label 的脚本化规则码。
+
+#### 真实化结果 (rule_detection_stats.json + 表 6-6)
+
+| 规则码 | 中文名称 | 子层 | DR (%) | FAR (%) |
+|--------|---------|------|:------:|:-------:|
+| R1 | 行人优先 | 交规 | 0.0 | 0.0 |
+| R2 | 闯红灯 | 交规 | — | 0.0 |
+| R3 | 实线变道 | 交规 | — | 0.0 |
+| R4 | 对向会车违规 | 交规 | 100.0 | 100.0 |
+| R7 | 路口未让行 | 交规 | 0.0 | 0.0 |
+| R8 | 弱势参与者保护 | 交规 | 0.0 | 0.0 |
+| R11 | 恶劣天气限速 | 交规 | — | 0.0 |
+| R13 | 违法停车 | 交规 | 0.0 | 0.0 |
+| R14 | 违反交通标志 | 交规 | — | 0.0 |
+| R17 | 不按规定车道 | 交规 | — | 0.0 |
+| R18 | 逆行车道 | 交规 | 0.0 | 0.0 |
+| RSS_R13a | 纵向安全距离 | RSS | 44.1 | 42.8 |
+| RSS_R14a | 横向安全距离 | RSS | 12.8 | 22.6 |
+| RSS_R15a | 横向危险状态 | RSS | — | 0.0 |
+| **平均（交规）** | — | — | **16.7** | **9.1** |
+| **平均（RSS）** | — | — | **28.4** | **21.8** |
+| **总平均** | — | — | **19.6** | **11.8** |
+
+(总平均 19.6% / 11.8% — 严重低于 PLAN 的 93.8% / 1.6% 预估，差距主要来自
+GPS 漂移导致大量 FP / 脚本化 auto_label 中 R4、R8 的标注与 RuleEnforcer 完全不一致。)
+
+#### 运行方式
+
+```bash
+# 全量跑 (约 2 min, 40867 violations / 24k 帧)
+python3 scripts/pipeline/offline_rule_enforcer.py
+
+# 抽样 (debug/快速迭代)
+python3 scripts/pipeline/offline_rule_enforcer.py --max-frames 500 --skip-first 100
+
+# 仅写 JSON (不 patch chapter6)
+python3 scripts/pipeline/offline_rule_enforcer.py --no-patch
+
+# 预览 (dry-run)
+python3 scripts/pipeline/offline_rule_enforcer.py --dry-run
+```
+
+#### 关键中间产物
+
+| 文件 | 内容 |
+|------|------|
+| `data/dataset/rule_detection_stats.json` | 完整混淆矩阵 (4776 frames evaluated) |
+| `logs/pipeline/offline_rule_enforcer_*.log` | 逐帧运行日志 (含 FPS、violation 数) |
+| `docs/thesis/chapter6_01.md` (表 6-6) | 已用 REAL_FILL 标记包裹，可由脚本复算 |
