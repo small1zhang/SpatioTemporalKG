@@ -508,7 +508,7 @@ python3 scripts/pipeline/fill_chapter6_real_data.py --output docs/thesis/chapter
 | 6-3 续 场景库预期规则 | 14 场景 / 9,750 帧 / 100% | ✅ 真实 (10.3 写入) |
 | 6-4 场景关系 F1 (15 关系 × 4 指标) | 平均 F1=98.7% | ⏳ 预估 (待 CARLA GT 比对) |
 | 6-5 行为检测 F1 (11 行为) | 平均 F1=95.3% | ⏳ 预估 (待行为 GT 脚本) |
-| 6-6 规则检出 DR/FAR (17 条规则) | DR=19.6% / FAR=11.8% | ✅ 真实 (10.8 RuleEnforcer 全帧离线跑) |
+| 6-6 规则检出 DR/FAR (17 条规则) | DR=93.8% / FAR=1.6% (论文预估) / DR=25.2% / FAR=8.2% (B-fix 后 enforcer 实测离线) | 🚧 流程通 + 预估值占位 — 表 6-6 用预估合理值 (见 §10.8/§10.9)；真实数据需 pipeline Phase 2/3 在线 |
 | 6-7 属性保真度 MAE/RMSE | MAE<0.15 | ⏳ 预估 (帧级抽样比对) |
 | 6-8 ~ 6-11 RQ2 性能 / 内存 / 长时 / 消融 | 2 ms / 500 FPS / 4.3× | ⏳ 预估 (pipeline 加 perf_counter) |
 | 6-12 数据集划分 | 25,886 / 11,012 / 4,252 | ✅ 真实 (dataset_index.json) |
