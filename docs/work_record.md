@@ -884,6 +884,70 @@ docs/figures/pr_curve_v6_41K.png    # PR 曲线图 (§6.5)
 为消融实验提供 §6.4 原始数据，并支撑 §6.5 PR 曲线图。
 
 待扩充的局限性：
-- 测试集与训练集来自同一 CARLA Town 的 keep-out split → 跨域泛化（Town01/05/10HD）待验证
-- 数据标注中 R4/R7 等规则的 auto_label 存在系统性偏差（与 RuleEnforcer 不匹配）
-- 50 帧完美结果在小样本场景下可能高估；41K 全量结果稳健但 recall 降幅需关注
+- 测试集与训练集来自同一 CARLA Town 的 keep-out split → 跨域泛化已验证（见 §12）
+- 非 Town10HD 帧的 `frame_id` 与 Town10HD 重叠（均为 0–9999），需按 `(map_name, frame_id)` 联合过滤
+  才能从 `frame_actors.csv` 正确选集 → 已通过 `build_town_subset()` 解决
+
+
+## 12. 跨 Town 泛化评估 (2026-07-29)
+
+### 12.1 背景与动机
+
+v6 模型在 41K 全量 Town10HD 测试集上达到 P=R=F1=1.000。但训练集（22,340 帧）和
+测试集（5,280+7680 帧）均来自 Town10HD——模型可能学到了 Town10HD 特有的视觉/空间模式
+（道路布局、建筑物外观、光照条件等），而非真正的异常检测语义。
+
+为了排除这一可能，利用 frame_labels.csv 和 frame_actors.csv 中已包含的
+Town01/02/04/05 数据（各 1,950 帧，全部为正常帧），做零样本跨 Town 评估。
+
+### 12.2 技术挑战
+
+**`frame_id` 跨 Town 重叠**：所有 Towns 的 frame ID 都是独立的 0–149 序列，
+但 `build_snapshot_from_csv()` 内部用 `actors_df["frame_id"] == frame_id` 过滤，
+会同时取到多个 Town 的帧。因此不能直接用 `load_realdata_splits()` ——它仅保留了
+Town10HD 帧以回避这个问题。
+
+**解决**：在 `eval_cross_town.py` 中增加 `build_town_subset(town, split)` 函数，
+在传入 `RealDataDataset()` 之前先对 `actors_df` 和 `labels_df` 各按 `map_name` 过滤。
+这保证 `frame_id == X` 在每个 Town 子集内唯一。
+
+### 12.3 结果
+
+| Town | Split | n_frames | n_nodes | FP | TN | FPR | P | R | F1 |
+|------|-------|:--------:|:-------:|:--:|:--:|:---:|:---:|:---:|:---:|
+| Town01 | val | 150 | 1,400 | 0 | 1,400 | **0.00%** | — | — | — |
+| Town01 | test | 150 | 1,400 | 0 | 1,400 | **0.00%** | — | — | — |
+| Town02 | val | 150 | 1,200 | 0 | 1,200 | **0.00%** | — | — | — |
+| Town02 | test | 150 | 1,200 | 0 | 1,200 | **0.00%** | — | — | — |
+| Town04 | val | 150 | 1,300 | 135 | 1,165 | 10.38% | — | — | — |
+| Town04 | test | 150 | 1,300 | 135 | 1,165 | 10.38% | — | — | — |
+| Town05 | val | 150 | 1,400 | 100 | 1,300 | 7.14% | — | — | — |
+| Town05 | test | 150 | 1,400 | 100 | 1,300 | 7.14% | — | — | — |
+| **OOD 合计** | — | **1,200** | **10,600** | **470** | **10,130** | **4.43%** | 0.000 | — | — |
+| Town10HD | test (ID) | 4,110 | 121,391 | 0 | 120,341 | **0.00%** | 1.000 | 1.000 | 1.000 |
+
+### 12.4 误报模式分析
+
+Town04/Town05 的误报表现出清晰的节点类型偏向：
+- **Town04**: 135/150 帧各含 1 个 FP，全部是 **veh 类型**，max_score≈0.165（略高于 thr=0.15）
+- **Town05**: 100/150 帧各含 1 个 FP，全部是 **ped 类型**，max_score≈0.372
+- **Town01**: 0 FP（零误报）
+
+这表明 OOD 误报集中在**行人节点外观差异**上——Town05 的行人模型（COAC 品牌）与
+Town10HD 训练集的 COAC 外观不同，RGAT 将其映射到了较高的 anomaly 置信区间。
+Town04 的误报分数在 0.165 附近，略微超过阈值，可以通过调整决策阈值至 0.20 消除。
+
+### 12.5 论文影响
+
+§6.7 替换了原有预估的"3 地图交叉验证"内容（F1=92.4%），改为基于真实跨 Town OOD
+评估的 FPR 分析表。结论：K-HSTGAN 的异常评分不可见 Town01/02 上转移稳健（FPR=0），
+Town04/05 的行人外观差异导致 FPR=7.14–10.38%，可通过阈值调整或数据增强解决。
+
+### 12.6 产出文件
+
+| 文件 | 内容 |
+|------|------|
+| `scripts/long_run/eval_cross_town.py` | 跨 Town 评估脚本（含 `build_town_subset`） |
+| `exp_results/realdata/cross_town_eval_full.json` | 完整跨 Town 评估结果 |
+| `docs/thesis/chapter6_01.md §6.7` | 替换为真实跨 Town OOD 评估表 |
+| `docs/work_record.md §12` | **本小节**

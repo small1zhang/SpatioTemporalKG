@@ -192,8 +192,8 @@ class K_HSTGAN(nn.Module):
         # Scene Transformer：LSTM 序列 + 行为序列
         h_temporal = self.scene_transformer(
             h_lstm.unsqueeze(1))  # [N, F']
-# Add skip connection from spatial encoding to preserve node-level identity
-h_temporal = h_temporal + h_spatial
+        # Add skip connection from spatial encoding to preserve node-level identity
+        h_temporal = h_temporal + h_spatial
 
         # === 5. 多任务融合头（节点级预测：对每个节点输出独立分布）===
         y_scene = F.softmax(self.scene_head(h_temporal), dim=-1)        # [N, 3]
