@@ -18,8 +18,8 @@
 
 \$$
 \boldsymbol{\kappa}_{\text{rss}}(v) = \Big[
-\Delta d_{\min}^{\text{long}} - d_{\text{long}},\
-\Delta d_{\min}^{\text{lat}} - d_{\text{lat}},\
+d_{\min}^{\text{long}} - d_{\text{long}},\
+d_{\min}^{\text{lat}} - d_{\text{lat}},\
 \text{TTC} - \tau_{\text{safe}},\
 v - v_{\text{limit}},\
 \text{brake} - \text{brake}_{\min}
@@ -31,11 +31,13 @@ v - v_{\text{limit}},\
 
 | 分量 | 含义 | 公式来源 | 正常范围 | 异常方向 |
 |------|------|---------|---------|---------|
-| `Δd_long` | 纵向安全距离残差 | Eq.(3.12) | > 0（安全）| < 0 |
-| `Δd_lat` | 横向安全距离残差 | Eq.(3.14) | > 0 | < 0 |
-| `TTC_res` | 碰撞时间残差 | TTC = d / (v_A - v_B)，$\tau$=2.5s | > 0 | < 0 |
-| `v_res` | 速度限速残差 | 区域限速 - current_speed | > 0 | < 0 |
-| `brake_res` | 制动残差 | brake - brake_min(0.3) | > 0 | < 0 |
+| `Δd_long` | 纵向安全距离余量 | Eq.(3.12) | < 0（安全）| > 0 |
+| `Δd_lat` | 横向安全距离余量 | Eq.(3.14) | < 0 | > 0 |
+| `TTC_res` | 碰撞时间余量 | TTC = d / (v_A - v_B)，$\tau$=2.5s | > 0 | < 0 |
+| `v_res` | 速度限速余量 | current_speed - v_limit | < 0 | > 0 |
+| `brake_res` | 制动余量 | brake - brake_min(0.3) | < 0（正常巡航） | > 0（持续制动 → 异常）|
+
+注：`Δd_long` 与 `Δd_lat` 采用"危险程度正向"约定（即 $d_{\min} - d > 0$ 表示实际距离小于安全阈值、处于危险区），与 §2.4.3 公式 (2.28) 残差方向一致，也与源码 `stk/gnn/exporter.py:compute_kappa_rss` 中的工程实现（`d_min_long - d_long`）严格对应。`TTC_res` / `v_res` / `brake_res` 虽在公式中看起来方向不一，但均经 `LayerNorm` 归一化后输入网络，符号方向不影响模型容量。
 
 残差向量 $\boldsymbol{\kappa}_{\text{rss}}(v)$ 经 $\text{LayerNorm}$ 归一化后与原始特征拼接：
 

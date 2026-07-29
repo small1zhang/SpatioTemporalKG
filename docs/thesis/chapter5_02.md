@@ -58,11 +58,11 @@ $$
 4.    d_long ← longitudinal_distance(v, front_v)
 5.    d_min ← compute_dmin_long(v.speed, front_v.speed, RSS_PARAMS)
 6.    ttc ← compute_ttc(d_long, v.speed - front_v.speed)
-7.    κ ← [
-8.        d_min - d_long, compute_dmin_lat(...) - compute_dlat(v, front_v),
-9.        ttc - 2.5, v.speed - v.speed_limit,
-10.       v.brake - 0.3
-11.   ]
+        7.    κ ← [
+        8.        d_min - d_long, compute_dmin_lat(...) - compute_dlat(v, front_v),
+        9.        ttc - 2.5, v.speed - v.speed_limit,
+        10.       v.brake - 0.3
+        11.   ]
 12.   κ_rss_list.append(LayerNorm(κ))
 13. end for
 14. κ_rss ← stack(κ_rss_list)  # N×5
