@@ -447,7 +447,68 @@ $$
 
 `run_rss_check(d_long, d_lat, v_A, v_B, v_lat_A, v_lat_B, brake_values)` 是 RSS 综合入口函数，返回包含上述全部判定的九项输出：`is_dangerous_state`、`is_safe_distance_violation`、`is_lateral_dangerous_state`、`is_no_proper_response`、`is_responsible`、`d_min_long`、`d_min_lat`、`severity`、`evidence_path`。其中 `evidence_path` 是触发该判定的证据节点集合，按本节末尾 3.3.3.4 节所述，作为 `supportedByEvidence` 边的目标节点写入图谱。
 
-### 3.3.3.2 交通法规子层（R1-R18）
+### 3.3.3.1a RSS 扩充场景规则
+
+RSS 基本模型（纵向/横向安全距离）覆盖了两车在同车道或相邻车道匀速跟驰的标准场景，但在自动驾驶仿真安全验证中还需处理切入、切出等动态交互。Mobileye RSS v3.0 [Mobileye, 2018] 在基本模型之外定义了四项扩充场景规则，本文在 STKG 规则层中对其中两项**可直接适用的**进行了形式化建模（留作框架性描述，具体代码实现标记为未来扩展，见表 3-17a）：
+
+#### 规则一：Cut-in 切入场景
+
+当旁车道车辆 $B$ 从相邻车道向本车道完成变道（在 CARLA 中通过 `lane_id` 变化 + `changing_lane` 行为关系检测），自车 $A$ 与 $B$ 之间的安全距离应满足切入后的纵向 RSS 要求——即 $B$ 完成切入的**瞬间**，$A$ 需保持与 $B$ 的纵向安全距离不低于 $d_{\min}^{\text{long}}(A, B, t)$。Mobileye v3.0 §8.5.2 形式化：
+
+$$
+\text{CutInSafeDistanceViolation}(A, B, t) \iff \text{lane\_change}(B, t) \land \text{ahead\_of}(B, A, t) \land d_{\text{long}}(A, B, t) < \min\left(d_{\min}^{\text{long}}(A, B, t),\ d_{\text{min,cutin}}\right)
+\tag{3.17a}
+$$
+
+其中 $d_{\text{min,cutin}} = 1.5 \times d_{\min}^{\text{long}}(A, B, t)$ 表示切入场景下取 $1.5$ 倍基本 RSS 距离。该规则与第三章 3.6 节场景库中的 S10（行人鬼探头）、S30（多违规冲突）等包含"变道切入"行为的场景直接匹配——当此类场景中出现 target 变道接近 ego 时，既触发 R1/R4 交规，也触发 Cut-in RSS 规则。
+
+#### 规则二：Cut-out 驶离场景
+
+当本车道前方车辆 $B$ 变道驶离（`exit\_lane(B, t)`、`lane\_change(B, t) \land \neg ahead\_of(B, A, t+1)`），自车 $A$ 原本跟驰 $B$ 的安全距离约束需转移至新的前车 $C$。Mobileye v3.0 §8.5.3 要求 $B$ 在驶离后的 $t_b$ 时间内仍需保证与 $A$ 的最小安全距离（防止 $B$ 驶离后 $A$ 面对更近的前车 $C$ 无法及时响应）：
+
+$$
+\text{CutOutSafeDistanceViolation}(A, B, C, t) \iff \text{exit\_lane}(B, t) \land \bigwedge_{k=0}^{K-1} d_{\min}^{\text{long}}(A, C, t+k) < d_{\min}^{\text{long}}(A, B, t)
+\tag{3.17b}
+$$
+
+其中 $K = 60$ 对应 $3$ s 缓冲窗口（$K = 60$ 帧 @ 20 Hz）。该规则在第五章 KS-NBCF 的证据链中的 `avd_col`（紧急避撞）异常注入场景中具有强相关——多帧的 TTC 跌落检测器常在这些场景被触发可直接补充为 RSS 证据。
+
+#### 规则三：反应不当判定增强（No Proper Response Refinement）
+
+基本 NoProperResponse 判定（式 3.16）采用固定阈值 $\text{brake} < 0.3$。Mobileye v3.0 §9.2 建议增设**制动速率学约束**——要求后车在 DangerousState 持续期间的 `brake_jerk` 必须在 3 帧以内从低于 0.3 的瞬时过渡到高于 0.7，否则视为未采取有效制动。增强判定为：
+
+$$
+\text{NoProperResponseEnhanced}(A, t) \iff \bigwedge_{k=0}^{2} \left( \text{brake}(A, t+k) < \theta_{\text{brake}} \land \text{speed}(A, t+k) > v_{\text{safe}}(\rho, a_{\min,\text{brake}}) \right)
+\tag{3.17c}
+$$
+
+其中 $v_{\text{safe}}(\rho, a_{\min,\text{brake}}) = v_A - a_{\min,\text{brake}} \cdot \rho$ 是自车在反应时间内理论上应达到的最大安全延时速度。该增强与当前工程使用的制动历史 30 帧队列（`_brake_history`）兼容，仅在上层增添一个独立的 severity 因子，不影响现有违规节点的输出。
+
+#### 规则四：施工路段参数自适应
+
+当车辆进入标有 `construction_zone` 属性的道路段时（本文通过 `RoadElementEntity` 节点的 `lane_type` 字段继承自 CARLA 路点属性），RSS 参数应自适应调整：$a_{\min,\text{brake}}^{\text{cz}} = 2 \times a_{\min,\text{brake}}$、$\rho^{\text{cz}} = \rho + 0.1\text{ s}$。公式 (3.11)–(3.14) 中的参数集 $\Theta_{\text{RSS}}$ 被替换为施工路段参数集 $\Theta_{\text{RSS}}^{\text{cz}}$：
+
+$$
+\Theta_{\text{RSS}}^{\text{cz}} = \left\{ \rho + 0.1,\ 2\,a_{\max,\text{accel}},\ 0.75\,a_{\min,\text{brake}},\ 8.0,\ \mu,\ 1.5,\ 3.0 \right\}
+\tag{3.17d}
+$$
+
+由于 CARLA 0.9.16 的 Town10HD 地图未包含施工区域标定，该规则在本文中作为**形式化框架**给出，不纳入表 3-18 的工程规则清单，但在 §4.4 知识注入层的参数可配置性设计中预留了动态参数覆盖接口（`RuleEnforcer.__init__` 的 `rss_params` 参数）。
+
+**表 3-17a** RSS 扩充场景规则汇总
+
+[三线表]
+
+| 规则 | 编号 | 判定条件 | 主要来源 | 本文状态 |
+|------|------|---------|---------|---------|
+| 切入安全距离 | `RSS_CUTIN` | $\text{lane\_change}(B) \land d_{\text{long}} < 1.5\,d_{\min}^{\text{long}}$ | [Mobileye v3.0 §8.5.2] | 框架式描述 |
+| 驶离安全缓冲 | `RSS_CUTOUT}$ | $\text{exit\_lane}(B) \land K\text{-帧缓冲协议}$ | [Mobileye v3.0 §8.5.3] | 框架式描述 |
+| 反应不当增强 | `RSS_NPR_ENH` | $\text{DangerousState} \land \text{brake}_{jerk}$ 未达标 | [Mobileye v3.0 §9.2] | 工程兼容描述 |
+| 施工路段自适应 | `RSS_CZ_ADAPT` | $\text{construction\_zone} \implies \Theta_{\text{RSS}}^{\text{cz}}$ | [Mobileye v3.0 §10] + [ISO 21448] | 形式框架（无地图数据） |
+
+四条扩充规则均不改变 STKG 原有 RSS 子层的基本算子结构（纵向/横向仍由式 3.11–3.14 定义），四项扩展仅在上层针对特定场景添加判别分支，扩大了规则层对复杂动态交互（变道切入、驶离后缓冲、制动响应延迟、道路条件变化）的覆盖能力。这些规则以 **CUTIN / CUTOUT / NPR_ENH / CZ_ADAPT** 的 rule_code 编号区分，后续版本可逐项实现并纳入表 3-18 的工程规则清单。
+
+### 3.3.3.2 交通法规子层与 RSS 扩充规则（R1–R18 + CUTIN/CUTOUT/NPR/CZ）
 
 交通法规子层覆盖中国《道路交通安全法》中 14 条与自动驾驶直接相关的规则（R1-R18，含 R6/R12/R14/R15 未实现）。每条规则都由一个独立的 `check_Ri_*` 函数实现。表 3-18 汇总全部 14 条规则。
 
