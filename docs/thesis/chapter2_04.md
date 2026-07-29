@@ -26,10 +26,10 @@ OpenSCENARIO 侧重于场景"剧本式"执行规则，不天然提供场景的�
 
 Shalev-Shwartz 等人在 2017 年提出 RSS（Responsibility-Sensitive Safety）模型 [10]，是自动驾驶形式化安全理论的代表性工作。RSS 定义了纵向与横向安全距离的封闭性公式与责任归因规则。
 
-**纵向安全距离**：同车道后车 $A$ 与前车 $B$，纵向距离 $d_{\text{long}}$ 应满足：
+**纵向安全距离**：同车道后车 $A$ 与前车 $B$，纵向距离 $d_{\text{long}}$ 应满足（采用 Shalev-Shwartz 等 [Shalev-Shwartz et al., 2017] 与 Mobileye RSS v3.0 完整定义 [Mobileye, 2018]，含反应期加速项）：
 
 \$$
-d_{\text{long}}^{\min} = \max\left( 0,\ \frac{v_A^2}{2 a_{\min,\text{brake},A}} - \frac{v_B^2}{2 a_{\max,\text{brake},B}} + v_A \rho \right)
+d_{\text{long}}^{\min} = \max\left( 0,\ v_A \rho + \tfrac{1}{2} a_{\max,\text{accel},A} \rho^2 + \frac{\left(v_A + a_{\max,\text{accel},A} \rho\right)^2}{2\, a_{\min,\text{brake},A}} - \frac{v_B^2}{2\, a_{\max,\text{brake},B}} \right)
 \tag{2.26}
 \$$
 
@@ -41,18 +41,19 @@ d_{\text{long}}^{\min} = \max\left( 0,\ \frac{v_A^2}{2 a_{\min,\text{brake},A}} 
 |------|------|-----------|
 | $v_A$ | 后车速度 | — |
 | $v_B$ | 前车速度 | — |
-| $a_{\min,\text{brake},A}$ | 后车最小合理刹车加速度 | 2 m/s² |
-| $a_{\max,\text{brake},B}$ | 前车最大合理刹车加速度 | 4 m/s² |
-| $\rho$ | 后车反应时间 | 0.1 s |
+| $\rho$ | 后车反应时间 | 0.3 s |
+| $a_{\max,\text{accel},A}$ | 反应期内后车最大合理加速度 | 0.5 m/s² |
+| $a_{\min,\text{brake},A}$ | 后车最小合理刹车加速度 | 3 m/s² |
+| $a_{\max,\text{brake},B}$ | 前车最大合理刹车加速度 | 8 m/s² |
 
-**横向安全距离**：相邻车道车 $A$ 与 $B$，横向距离 $d_{\text{lat}}$ 应满足：
+**横向安全距离**：相邻车道车 $A$ 与 $B$，横向距离 $d_{\text{lat}}$ 应满足（采用 Mobileye RSS v3.0 [Mobileye, 2018] Section 8.4 形式）：
 
 \$$
-d_{\text{lat}}^{\min} = \mu + \max\left( 0,\ \frac{w_A (v_{A,\perp} + v_{AB,\perp})}{2 a_{\min,\text{lat},A}} + \frac{w_B v_{AB,\perp}}{2 a_{\min,\text{lat},B}} \right)
+d_{\text{lat}}^{\min} = \max\left( 0,\ \mu + \frac{v_{\text{lat},A}^2}{2\, a_{\min,\text{lat,brake},A}} + \rho\, v_{\text{lat},A} - \frac{v_{\text{lat},B}^2}{2\, a_{\min,\text{lat,brake},B}} \right)
 \tag{2.27}
 \$$
 
-其中 $w_A, w_B$ 为车宽，$\mu$ 为横向最小安全余量，$a_{\min,\text{lat}}$ 为横向最小合理刹车加速度（默认 1 m/s²），$v_{\perp}$ 为横向速度。
+其中 $\mu$ 为横向最小安全余量（默认 0.5 m），$a_{\min,\text{lat,brake}}$ 为横向最小合理刹车加速度（默认 1.5 m/s²），$v_{\text{lat},A}$、$v_{\text{lat},B}$ 分别为车 $A$、$B$ 的横向速度分量，$\rho$ 同纵向定义。横向公式不含车宽项——车宽的影响在 §3.3.3 给出物理解释：横向距离是相对运动投影，$w_A,w_B$ 已隐含在车道级相对几何中，不应再以车宽乘子重复计入。
 
 公式 (2.26) 与 (2.27) 是 RSS 模型的核心闭式表达。其物理逻辑为：**"在我车以当前速度刹车 → 走到完全停止" 过程中，与对方车的距离始终不小于对方车在最差情况下同时刹车的影响范围**。参数 $\rho$ 表示我车的反应滞后——我车在感知到危险后到开始刹车之间经过 $\rho$ 秒内的速度仍维持 $v_A$。
 
