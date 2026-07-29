@@ -23,7 +23,7 @@ logs/
 *.csv
 *.json
 # Exception: 论文章节附属实验数据 JSON (论文表/图原始来源，体量小且需入版本)
-!docs/thesis/exp_data/*.json
+!docs/thesis/exp_data/**
 
 # Environment
 .env

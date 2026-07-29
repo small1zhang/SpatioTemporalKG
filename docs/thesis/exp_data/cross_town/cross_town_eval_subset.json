@@ -1,0 +1,222 @@
+{
+  "threshold": 0.15,
+  "towns": {
+    "Town01": {
+      "val": {
+        "threshold": 0.15,
+        "P": 0.0,
+        "R": 0.0,
+        "F1": 0.0,
+        "FPR": 0.0,
+        "TP": 0,
+        "FP": 0,
+        "TN": 747,
+        "FN": 0,
+        "n_pos": 0,
+        "n_neg": 747,
+        "n_total": 747,
+        "n_frames": 80,
+        "tag": "Town01/val"
+      },
+      "test": {
+        "threshold": 0.15,
+        "P": 0.0,
+        "R": 0.0,
+        "F1": 0.0,
+        "FPR": 0.0,
+        "TP": 0,
+        "FP": 0,
+        "TN": 794,
+        "FN": 0,
+        "n_pos": 0,
+        "n_neg": 794,
+        "n_total": 794,
+        "n_frames": 85,
+        "tag": "Town01/test"
+      }
+    },
+    "Town02": {
+      "val": {
+        "threshold": 0.15,
+        "P": 0.0,
+        "R": 0.0,
+        "F1": 0.0,
+        "FPR": 0.0,
+        "TP": 0,
+        "FP": 0,
+        "TN": 641,
+        "FN": 0,
+        "n_pos": 0,
+        "n_neg": 641,
+        "n_total": 641,
+        "n_frames": 80,
+        "tag": "Town02/val"
+      },
+      "test": {
+        "threshold": 0.15,
+        "P": 0.0,
+        "R": 0.0,
+        "F1": 0.0,
+        "FPR": 0.0,
+        "TP": 0,
+        "FP": 0,
+        "TN": 682,
+        "FN": 0,
+        "n_pos": 0,
+        "n_neg": 682,
+        "n_total": 682,
+        "n_frames": 85,
+        "tag": "Town02/test"
+      }
+    },
+    "Town04": {
+      "val": {
+        "threshold": 0.15,
+        "P": 0.0,
+        "R": 0.0,
+        "F1": 0.0,
+        "FPR": 0.1037463976930296,
+        "TP": 0,
+        "FP": 72,
+        "TN": 622,
+        "FN": 0,
+        "n_pos": 0,
+        "n_neg": 694,
+        "n_total": 694,
+        "n_frames": 80,
+        "tag": "Town04/val"
+      },
+      "test": {
+        "threshold": 0.15,
+        "P": 0.0,
+        "R": 0.0,
+        "F1": 0.0,
+        "FPR": 0.10162601625878555,
+        "TP": 0,
+        "FP": 75,
+        "TN": 663,
+        "FN": 0,
+        "n_pos": 0,
+        "n_neg": 738,
+        "n_total": 738,
+        "n_frames": 85,
+        "tag": "Town04/test"
+      }
+    },
+    "Town05": {
+      "val": {
+        "threshold": 0.15,
+        "P": 0.0,
+        "R": 0.0,
+        "F1": 0.0,
+        "FPR": 0.07095046853988018,
+        "TP": 0,
+        "FP": 53,
+        "TN": 694,
+        "FN": 0,
+        "n_pos": 0,
+        "n_neg": 747,
+        "n_total": 747,
+        "n_frames": 80,
+        "tag": "Town05/val"
+      },
+      "test": {
+        "threshold": 0.15,
+        "P": 0.0,
+        "R": 0.0,
+        "F1": 0.0,
+        "FPR": 0.07052896725351979,
+        "TP": 0,
+        "FP": 56,
+        "TN": 738,
+        "FN": 0,
+        "n_pos": 0,
+        "n_neg": 794,
+        "n_total": 794,
+        "n_frames": 85,
+        "tag": "Town05/test"
+      }
+    },
+    "Town10HD": {
+      "val": {
+        "threshold": 0.15,
+        "P": 0.9999999991666666,
+        "R": 0.9230769223668639,
+        "F1": 0.9599999942400002,
+        "FPR": 0.0,
+        "TP": 12,
+        "FP": 0,
+        "TN": 2771,
+        "FN": 1,
+        "n_pos": 13,
+        "n_neg": 2771,
+        "n_total": 2784,
+        "n_frames": 99,
+        "tag": "Town10HD/val"
+      },
+      "test": {
+        "threshold": 0.15,
+        "P": 0.9999999996,
+        "R": 0.9999999996,
+        "F1": 0.9999999946,
+        "FPR": 0.0,
+        "TP": 25,
+        "FP": 0,
+        "TN": 2813,
+        "FN": 0,
+        "n_pos": 25,
+        "n_neg": 2813,
+        "n_total": 2838,
+        "n_frames": 98,
+        "tag": "Town10HD/test"
+      }
+    }
+  },
+  "summary": {
+    "OOD_aggregate": {
+      "TP": 0,
+      "FP": 256,
+      "TN": 5581,
+      "FN": 0,
+      "n_frames": 660,
+      "n_pos": 0,
+      "n_neg": 5837,
+      "P": 0.0,
+      "R": 0.0,
+      "F1": 0.0,
+      "FPR": 0.04385814630795981
+    },
+    "ID_test": {
+      "threshold": 0.15,
+      "P": 0.9999999996,
+      "R": 0.9999999996,
+      "F1": 0.9999999946,
+      "FPR": 0.0,
+      "TP": 25,
+      "FP": 0,
+      "TN": 2813,
+      "FN": 0,
+      "n_pos": 25,
+      "n_neg": 2813,
+      "n_total": 2838,
+      "n_frames": 98,
+      "tag": "Town10HD/test"
+    },
+    "ID_val": {
+      "threshold": 0.15,
+      "P": 0.9999999991666666,
+      "R": 0.9230769223668639,
+      "F1": 0.9599999942400002,
+      "FPR": 0.0,
+      "TP": 12,
+      "FP": 0,
+      "TN": 2771,
+      "FN": 1,
+      "n_pos": 13,
+      "n_neg": 2771,
+      "n_total": 2784,
+      "n_frames": 99,
+      "tag": "Town10HD/val"
+    }
+  }
+}

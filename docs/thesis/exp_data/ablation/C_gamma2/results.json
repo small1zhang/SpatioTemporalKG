@@ -1,0 +1,26 @@
+{
+  "test": {
+    "P": 1.0,
+    "R": 0.7269,
+    "F1": 0.8419,
+    "accuracy": 0.9971,
+    "val_loss": 0.04793367576040328,
+    "TP": 378,
+    "FP": 0,
+    "TN": 48616,
+    "FN": 142,
+    "n_total": 49136
+  },
+  "best_val_f1": 1.0,
+  "epochs_ran": 20,
+  "train_time_sec": 857.0692505836487,
+  "config": {
+    "max_actors": 25,
+    "epochs": 20,
+    "lr": 0.001,
+    "device": "cuda:1",
+    "train_frames": 2000,
+    "val_frames": 2000,
+    "test_frames": 2000
+  }
+}
