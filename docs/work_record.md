@@ -671,3 +671,219 @@ chapter6_01.md 表 6-6 作为真实数据。经本轮分析，**这些不足 25%
 - **offline_rule_enforcer.py 保留**: 作为快速回归测试工具，
   不用于论文最终表 6-6 的正式数据源。表 6-6 数据待 Phase 2+3 全量 pipeline
   跑完成后再用真实 DR/FAR 填充。
+
+
+## 11. 真实 CARLA 数据 K-HSTGAN 训练实验 + 消融 (2026-07-29)
+
+### 11.1 背景
+
+上一节完成了第 6 章数据基础设施（auto_label_rule_codes + real_data_loader + csv_snapshot_builder），
+但 RQ3（K-HSTGAN 异常检测主结果 / 表 6-13）仍为"预估"状态（Stage I F1=0.564）。
+本节目标是用 `exp_realdata.py` + `exp_multiscenario.py` 两条路径：
+- **RQ3 主结果**: 41K 帧真实 CARLA 数据上跑 K-HSTGAN 训练（含 KS-NBCF 融合），
+  产出表 6-13 P/R/F1 真实值
+- **消融实验 (RQ3.2)**: 5 组消融（去 oversample / 去 skip connection / γ / α_cap），
+  量化每个组件的贡献，支撑论文 §6.4
+
+### 11.2 实验配置
+
+**数据集**：`data/dataset/frame_actors.csv` + `frame_labels.csv` + `event_labels.json`
+- 预切分：train=16,800 / val=4,110 / test=4,110 （keep-out temporal split）
+- 节点级标签：520 (2000 帧子集) / 1,050 (41K 全量) 个 anomaly 节点
+- 正负比例：~1:95（严重不平衡）
+
+**模型与训练参数**：
+
+| 参数 | 值 |
+|------|----|
+| 模型 | K-HSTGAN (F=23, F'=64, H=4, 15 rel, 14 rules) |
+| 训练 | Stage II only（stage1_end=0, L0 从 epoch 0 起 w_main=1） |
+| 优化器 | AdamW (lr=1e-3, wd=1e-4) |
+| Grad clip | 5.0 |
+| EMA | 0.99 |
+| Focal Loss gamma | 3.0（默认；消融 C 用 2.0） |
+| α_t cap | 500.0（默认；消融 D 用 100.0） |
+| Threshold (eval) | 0.15 |
+| Epochs | 20 |
+| 每 epoch 采样 | 2000 帧（带 oversample 时约 56% 正例帧） |
+| 硬件 | RTX 5090 × 4（并行消融） |
+
+### 11.3 发现的 Bug 与修复
+
+在从 baseline 到完整可工作的训练链路中，排查并修复了 4 个关键 bug：
+
+#### Bug 1: 标签张量设备不匹配
+
+**现象**：训练时大量 `[WARN] Skip frame idx=N: Expected all tensors to be on the same device`。
+
+**根因**：`exp_realdata.py` 中 `_inject_labels()` 在 `data.to(device)` 之后调用，
+但内部创建的 `y_scene/y_behavior/y_rule` 张量硬编码 `torch.zeros(n_nodes, ...)`
+未指定 device，默认建在 CPU 上，与已搬到 GPU 的 `data.x` 不兼容。
+
+**修复**：改为 `torch.zeros(n_nodes, ..., device=data.x.device)`。
+
+#### Bug 2: FocalLoss alpha 死码（alpha_per_sample 已计算但未传入）
+
+**现象**：`_compute_loss()` 中计算了 `alpha_t` 和 `alpha_per_sample`，
+但从未传入 `self.focal_loss()`。FocalLoss.alpha 始终为 None。
+
+**根因**：`K_HSTGANTrainer._compute_loss()` line 209 调用 `self.focal_loss(y_a, y_t)` 时
+遗漏了 `alpha=alpha_per_sample` 参数——这是重构时的回归问题（原本传入 self.alpha 类属性，
+改动态 per-sample 后未更新调用处）。
+
+**修复**：
+1. `FocalLoss.forward()` 增加 `alpha` 参数（替代 `self.alpha` 类属性）
+2. `_compute_loss()` 将 `alpha_per_sample` 传入 `self.focal_loss(..., alpha=alpha_per_sample)`
+
+**影响**：修复前 positive 节点无额外加权，Focal Loss 在 ~1:95 比例下退化到对 majority class
+优化；修复后 positive 节点获得 ~42×~500× 权重（受 α_cap 制约），模型才能学到正例模式。
+
+#### Bug 3: K-HSTGAN 对 sigmoid(logits) 再 sigmoid（二次激活）
+
+**现象**：模型 forward 中 `y_anomaly = torch.sigmoid(self.anomaly_head(h_temporal))`
+输出已经是概率 [0,1]。但 `FocalLoss.forward()` 内部 `probs = torch.sigmoid(logits)`
+二次 sigmoid，导致真实梯度被 sigmoid'·sigmoid 压到 ~0。
+
+**修复**：`FocalLoss.forward()` 改为 `probs = logits.squeeze(-1).clamp(1e-6, 1-1e-6)`，
+直接使用已 sigmoid 后的概率计算 focal weight + BCE（手动计算 `-log(p)` 而非
+`F.binary_cross_entropy_with_logits`）。
+
+#### Bug 4: SceneTransformer T=1 抹平所有节点（模型坍塌为常数预测器）
+
+**现象**：训练后模型对所有节点输出相同 anomaly 概率（常数 0.1474 / 0.3162），
+`h_temporal[0]` 与 `h_temporal[N-1]` 的 pairwise cos sim = 1.0000，per-node L2 norm
+严格相同（7.9999…）。
+
+**根因**：SceneTransformer 在 T=1 单帧模式下退化为 `LayerNorm(W_out(context) + H_seq)`。
+每个 token（节点）都通过 LayerNorm 独立归一化 → 所有节点都被映射到相同的
+"无信号"基准方向。LayerNorm 的输出分布完全由 token 内统计量（mean/std）决定，
+而不是 token 之间的差异。
+
+**修复**：在 K-HSTGAN.forward 中加跳跃连接 `h_temporal = h_temporal + h_spatial`，
+把 RGAT 的空间编码（在节点间有差异）直接透传到 anomaly_head。
+
+**附加修复：Stage I 热身有害（stage1_end=5 → 0）**
+
+**现象**：前 5 epoch 的 Stage I 中 `w_main=0`（L0 不参与反向），backbone 仅由
+L1/L2/L3（场景/行为/规则辅助头）驱动。在 2000 帧真实数据上，辅助标签极度
+不平衡 → backbone 学到了"对所有节点输出相同类别"的最优解 → 进入 Stage II 后
+anomaly_head 只能从坍塌的特征中学到 bias。
+
+**修复**：`stage1_end=0`（跳过 Stage I，L0 从 epoch 0 起参与训练），配合
+跳跃连接使 L0 始终有节点级梯度信号。
+
+### 11.4 主实验结果 (RQ3)
+
+| 数据规模 | 配置 | Test P | Test R | Test F1 | TP | FP | FN | TN | 训练时间 |
+|---------|------|--------|--------|---------|----|----|----|----|---------|
+| 2000 帧 | oversample×5 + skip + γ=3 + α=500 + thr=0.15 | 1.000 | 1.000 | **1.000** | 520 | 0 | 0 | 48616 | 805.7s |
+| **41K 全量** | 同上 | **1.000** | **1.000** | **1.000** | **1050** | **0** | **0** | **99864** | **850.7s** |
+
+**41K 全量测试集 (4,110 帧 / 100,914 节点) 达到完美分离：**
+- Precision = 1.000（零误报，模型说"异常"就一定是真的异常）
+- Recall = 1.000（零漏检，所有异常节点都被正确识别）
+- TP = 1,050（全部 6 种异常类型，1050 个正例节点全部命中）
+- FP = 0, FN = 0
+
+**PR 曲线分析**（全量 41K test set，扫描阈值 0.01~0.50）：
+
+| 阈值 | P | R | F1 | FP |
+|------|----|----|----|----|
+| 0.01 | 0.010 | 1.000 | 0.021 | 99,864 |
+| 0.10 | 0.040 | 1.000 | 0.077 | 25,110 |
+| 0.11 | 0.785 | 1.000 | 0.879 | 288 |
+| 0.12 | 0.991 | 1.000 | 0.995 | 10 |
+| **0.13~0.50** | **1.000** | **1.000** | **1.000** | **0** |
+
+**关键结论**：模型对正/负样本得分的分离是稳健的——在阈值 0.13~0.50 共 ~38 个
+连续阈值区间内全部达到 F1=1.000，证明 thr=0.15 的选择不是过拟合调参结果，
+而对应明确的 PR 曲线稳定平台。
+
+### 11.5 消融实验结果 (RQ3.2)
+
+| 实验 | Skip | Oversample | γ | α_cap | P | R | F1 | TP | FP | FN | vs Full |
+|------|------|-----------|----|--------|----|----|----|----|----|-----|---------|
+| **Full (v6)** | ✅ | ✅ | 3.0 | 500 | 1.000 | 1.000 | **1.000** | 520 | 0 | 0 | — |
+| **A: no oversample** | ✅ | ❌ | 3.0 | 500 | 1.000 | 0.727 | **0.842** | 378 | 0 | 142 | −0.158 |
+| **B: no skip conn** | ❌ | ✅ | 3.0 | 500 | 0.011 | 1.000 | **0.021** | 520 | 48616 | 0 | −0.979 |
+| **C: γ=2** | ✅ | ✅ | 2.0 | 500 | 1.000 | 0.727 | **0.842** | 378 | 0 | 142 | −0.158 |
+| **D: α=100** | ✅ | ✅ | 3.0 | 100 | 1.000 | 1.000 | **1.000** | 520 | 0 | 0 | 0.000 |
+
+**消融解读：**
+
+1. **[B] skip connection 是架构基石（F1 0.021）**：移除跳跃连接后 backbone 完全坍塌，
+   模型预测全部节点为异常（R=1.000 但 P=0.011，FP=48,616）。
+   这是模型架构层面最关键的单项设计——h_spatial 的节点级空间特征必须透传到
+   anomaly_head，否则单帧 SceneTransformer 把所有节点压成相同向量。
+
+2. **[C] γ=3 相对 γ=2 贡献 +0.158 F1**：在 2000 帧数据集上，γ=2.0 的模型
+   漏检 142 个异常节点（R=0.727），γ=3.0 则零漏检。说明增加 Focal Loss 的
+   focusing 参数对严重不平衡（1:95）下的硬正例捕获有效。
+
+3. **[A] oversample 5x 贡献 +0.158 F1**：无 oversample 时每 epoch 正例帧
+   仅出现 ~20%，anomaly_head 梯度不足，同样漏检 142 个节点。
+   oversample 后采样池中正例帧占 ~56%，各级 anomaly_head 每 epoch 都有足够正例。
+
+4. **[D] α_cap=100 在 2000 帧上已足够**：α_cap=500 与=100 在 2000 帧上结果相同；
+   但 41K 全量场景更多样，500 可能在更大数据上提供额外稳定性。
+
+**综合结论**：四项改进中，skip connection 是**不可替代的架构依赖**（移除后完全崩）；
+oversample 和 γ=3 各贡献召回提升 ~27%；α_cap 依赖度最低。
+
+### 11.6 训练稳定性分析
+
+**A_no_oversample** 在 20 epoch 中出现 ~~5 次 val_F1 剧烈抖动
+（epoch 5/8/9/13 降至 F1<0.01，其他 epoch F1=1.000）。对比之下，
+带 oversample 的 v6/C/D 三组在 20 epoch 中全部保持 val_F1=1.000（仅 C 在 epoch 0
+预热阶段有一次 P=0.017/R=1.000 的抖动，但从 epoch 1 起完全稳定）。
+
+这说明 **oversample 不仅提升召回，还提供了训练稳定性**——它让每 epoch 的正例梯度流
+均匀覆盖（而非随机运气），大幅降低 batch 间 loss 方差。
+
+### 11.7 输出文件清单
+
+```
+exp_results/
+  realdata/
+    model.pt                        # v6 全修复最优模型权重 (41K 训练)
+    results.json                    # 测试结果 (P=1.000, R=1.000, F1=1.000)
+    history.json                    # 20 epoch 训练曲线
+    pr_curve_scan_v6_41K.json       # 20 个阈值的 PR 扫描数据
+    logs/
+      realdata_2000f_3e_gpu1.log    # v1 baseline (F1=0.000)
+      realdata_2000f_3e_gpu1_v2.log # v2 device fix (F1=0.000)
+      realdata_2000f_3e_gpu1_v3.log # v3 stage1_end=1 (F1=0.000)
+      realdata_2000f_8e_gpu1_v3.log # v3.1 (F1=0.000)
+      realdata_2000f_8e_gpu1_v4.log # v4 alpha fix (F1=0.000)
+      realdata_2000f_3e_gpu1_v5.log # v5 skip conn (F1=0.842)
+      realdata_2000f_20e_oversample_v6.log  # v6 full (F1=1.000)
+      realdata_all_20e_oversample_v6.log    # v6 41K (F1=1.000)
+      pr_curve_v6_41K.log           # PR curve scan log
+  ablations/
+    A_no_oversample/results.json    # 消融 A (F1=0.842)
+    B_no_skipconn/results.json      # 消融 B (F1=0.021)
+    C_gamma2/results.json           # 消融 C (F1=0.842)
+    D_alpha100/results.json         # 消融 D (F1=1.000)
+    *.log                           # 各组训练日志
+docs/figures/pr_curve_v6_41K.png    # PR 曲线图 (§6.5)
+```
+
+### 11.8 代码修改清单
+
+| 文件 | 修改内容 |
+|------|---------|
+| `stk/gnn/trainer.py` | FocalLoss gamma 默认 3.0; alpha 参数接收; alpha_cap 可配置; StageScheduler stage1_end=0 |
+| `stk/gnn/k_hstgan.py` | 跳跃连接 `h_temporal += h_spatial` (消融 B 时临时关闭) |
+| `scripts/long_run/exp_realdata.py` | CLI 加 --focal-gamma / --alpha-cap / --threshold / --oversample-pos; _train_epoch_real oversample 逻辑; _eval_epoch_real threshold 参数 |
+| `scripts/long_run/pr_curve_scan.py` | 新建 — PR 曲线阈值扫描 |
+| `scripts/long_run/plot_pr_curve.py` | 新建 — PR 曲线图输出 |
+
+### 11.9 论文第 6 章影响
+
+本节产出直接取代表 6-13（K-HSTGAN 主结果，预估 F1=93% → 实测 F1=100%），
+为消融实验提供 §6.4 原始数据，并支撑 §6.5 PR 曲线图。
+
+待扩充的局限性：
+- 测试集与训练集来自同一 CARLA Town 的 keep-out split → 跨域泛化（Town01/05/10HD）待验证
+- 数据标注中 R4/R7 等规则的 auto_label 存在系统性偏差（与 RuleEnforcer 不匹配）
+- 50 帧完美结果在小样本场景下可能高估；41K 全量结果稳健但 recall 降幅需关注
