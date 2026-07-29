@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 import time
 from pathlib import Path
@@ -71,14 +72,18 @@ def _inject_labels(data: torch.Tensor, snapshot: dict) -> None:
     """
     从 snapshot 的 extracted 字段补充 y_scene / y_behavior / y_rule 伪标签。
     基于 violation 中的 anomaly_type 与 rule_code 映射。
+
+    注：标签张量创建在 `data.x.device` 上，以避免后续 `_compute_loss`
+    中 F.cross_entropy / F.binary_cross_entropy 抛设备不匹配错误。
     """
     n_nodes = data.x.size(0)
     n_rules = 14
+    device = data.x.device  # 跟随 data 当前所在设备（CPU 或 CUDA）
 
     # 默认全零
-    y_scene = torch.zeros(n_nodes, dtype=torch.long)
-    y_behavior = torch.zeros(n_nodes, dtype=torch.long)
-    y_rule = torch.zeros(n_nodes, n_rules, dtype=torch.float)
+    y_scene = torch.zeros(n_nodes, dtype=torch.long, device=device)
+    y_behavior = torch.zeros(n_nodes, dtype=torch.long, device=device)
+    y_rule = torch.zeros(n_nodes, n_rules, dtype=torch.float, device=device)
 
     violations = snapshot.get("rule_out", {}).get("violations", [])
     node_ids = snapshot["extracted"].get("_node_ids", [])
@@ -216,6 +221,8 @@ def main(args):
         patience=args.patience,
         grad_clip=5.0,
         lambda_reg=1e-4,
+        focal_gamma=args.focal_gamma,
+        alpha_cap=args.alpha_cap,
     )
 
     history = {"train": [], "val": [], "stages": []}
@@ -235,11 +242,13 @@ def main(args):
         n_train_use = min(len(train_ds), args.train_batch)
         train_metrics = _train_epoch_real(
             model, trainer, train_ds, n_train_use, device, epoch,
+            oversample_pos=args.oversample_pos,
         )
 
         # Validate
         val_metrics = _eval_epoch_real(
             model, val_ds, min(len(val_ds), args.val_batch), device,
+            threshold=args.threshold,
         )
 
         dt = time.time() - t_ep
@@ -278,6 +287,7 @@ def main(args):
     print("\n[5/5] Evaluation on test set...")
     test_metrics = _eval_epoch_real(
         model, test_ds, len(test_ds), device,
+        threshold=args.threshold,
     )
 
     result = {
@@ -327,8 +337,17 @@ def _train_epoch_real(
     n_samples: int,
     device: torch.device,
     epoch: int,
+    oversample_pos: bool = False,
 ) -> dict:
-    """在真实数据的 train_ds 上训练一个 epoch（采样 n_samples 帧）"""
+    """在真实数据的 train_ds 上训练一个 epoch（采样 n_samples 帧）。
+
+    Args:
+        oversample_pos: 若 True，先扫描所有帧的标签，识别含异常节点的帧，
+            然后把异常帧以 5x 倍率加权混入采样池。这相当于在节点级
+            严重不平衡（pos:neg ≈ 1:95）下做帧级重采样，让含异常的帧
+            在每个 epoch 中出现得更频繁，从而 anomaly_head 接收到更多
+            正例梯度。
+    """
     model.train()
     trainer.optimizer.zero_grad()
 
@@ -339,7 +358,45 @@ def _train_epoch_real(
     total_L1 = 0.0
 
     # 随机采样
-    indices = torch.randperm(min(n_samples, len(ds))).tolist()
+    if oversample_pos:
+        # 1) 扫描前 n_samples 帧的 data.y_anomaly，识别异常帧
+        # （直接读 ds[idx].y_anomaly，避免依赖 actors 字段结构差异）
+        scan_n = min(n_samples * 2, len(ds))  # 扫描 2x 池以获得更准的 pos/neg 比例
+        pos_indices = []
+        neg_indices = []
+        for i in range(scan_n):
+            try:
+                d = ds[i]
+                has_anom = bool(d.y_anomaly.sum().item() > 0)
+            except Exception:
+                has_anom = False
+            (pos_indices if has_anom else neg_indices).append(i)
+        n_pos = len(pos_indices)
+        n_neg = len(neg_indices)
+        if n_pos == 0:
+            print(f"  [oversample] WARN: no positive frames found, falling back to uniform")
+            indices = torch.randperm(min(n_samples, len(ds))).tolist()
+        else:
+            # 目标：让 pos 帧占总采样池的 ~50%（节点级 ~1:95 → 帧级 ~5:95 ≈ 5%）
+            # 重复 pos 帧 ~10x 倍率
+            target_pos_share = 0.5
+            if n_pos < n_neg:
+                # pos_count = pos_repeated; share = pos_repeated/(pos_repeated+neg)
+                # → pos_repeated = neg * share / (1 - share)
+                pos_repeated = int(n_neg * target_pos_share / (1 - target_pos_share))
+            else:
+                pos_repeated = n_pos * 3
+            repeat = max(5, pos_repeated // max(n_pos, 1))
+            pos_indices_repeated = pos_indices * repeat
+            weighted_indices = pos_indices_repeated + neg_indices
+            random.shuffle(weighted_indices)
+            indices = weighted_indices[:n_samples]
+            if epoch == 0:
+                print(f"  [oversample] pos_frames={n_pos}, neg_frames={n_neg} "
+                      f"(of {scan_n} scanned), repeat={repeat}, "
+                      f"pool_size={len(weighted_indices)}, sampled={len(indices)}")
+    else:
+        indices = torch.randperm(min(n_samples, len(ds))).tolist()
 
     for idx in indices:
         data = ds[idx].to(device)
@@ -385,6 +442,7 @@ def _eval_epoch_real(
     ds: RealDataDataset,
     n_samples: int,
     device: torch.device,
+    threshold: float = 0.15,
 ) -> dict:
     """在真实数据上评估。"""
     model.eval()
@@ -402,7 +460,7 @@ def _eval_epoch_real(
 
         try:
             y_a, y_s, y_b, y_r = model(data)
-            preds = (y_a.squeeze(-1) > 0.5).long()
+            preds = (y_a.squeeze(-1) > threshold).long()
             all_preds.append(preds.cpu())
             all_targets.append(data.y_anomaly.long().cpu())
 
@@ -459,7 +517,15 @@ if __name__ == "__main__":
     parser.add_argument("--train-batch", type=int, default=2000,
                         help="Max training frames per epoch")
     parser.add_argument("--val-batch", type=int, default=1000,
-                        help="Max validation frames per epoch")
+        help="Max validation frames per epoch")
+    parser.add_argument("--threshold", type=float, default=0.15,
+        help="Classification threshold for anomaly detection (default: 0.15)")
+    parser.add_argument("--oversample-pos", action="store_true",
+        help="Oversample frames containing anomalies during training")
+    parser.add_argument("--focal-gamma", type=float, default=3.0,
+        help="Focal Loss gamma parameter (default: 3.0)")
+    parser.add_argument("--alpha-cap", type=float, default=500.0,
+        help="Alpha cap for per-positive weight (default: 500.0)")
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     parser.add_argument("--actors-path", default="data/dataset/frame_actors.csv")
     parser.add_argument("--labels-path", default="data/dataset/frame_labels.csv")

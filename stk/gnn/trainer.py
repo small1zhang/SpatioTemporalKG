@@ -34,31 +34,48 @@ class FocalLoss(nn.Module):
         self.gamma = gamma
         self.alpha = alpha  # [N] per-sample weights
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor,
+                alpha: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Args:
-            logits:  [N, 1]  预测（sigmoid 前）
+            logits:  [N, 1]  预测概率（已是 sigmoid 后；K-HSTGAN.forward 在 anomaly_head 上
+                             直接施加 sigmoid，因此这里不再重复 sigmoid）
             targets: [N]    0/1 标签
+            alpha:   [N]    per-sample class weights（可选，通常来自 _compute_loss 中的
+                             adaptive alpha_t）；None 表示等权重。
         """
-        probs = torch.sigmoid(logits.squeeze(-1))  # [N]
+        probs = logits.squeeze(-1).clamp(1e-6, 1.0 - 1e-6)  # [N]
         targets = targets.float()
-        # Focal weight
         pt = probs * targets + (1 - probs) * (1 - targets)
         focal_weight = (1 - pt) ** self.gamma
-        # BCE
-        bce = F.binary_cross_entropy_with_logits(logits.squeeze(-1), targets, reduction="none")
+        eps = 1e-7
+        bce = -(targets * torch.log(probs + eps) +
+                (1 - targets) * torch.log(1 - probs + eps))
         loss = focal_weight * bce
-        if self.alpha is not None:
-            loss = loss * self.alpha
+        if alpha is not None:
+            loss = loss * alpha
         return loss.mean()
 
 
 class StageScheduler:
-    """三阶段学习率调度器（4.5 节训练计划表）。"""
+    """三阶段学习率调度器（4.5 节训练计划表）。
 
-    def __init__(self, lr_pretrain: float = 1e-3, lr_joint: float = 1e-4,
-                 lr_finetune: float = 1e-5,
-                 stage1_end: int = 5, stage2_end: int = 30):
+    实证调优：
+      - Stage I（仅 w_main=0 弱监督预热）被实测为有害：在真实 CARLA 数据上，
+        L1/L2/L3 的辅助标签在节点级极度不平衡，前若干 epoch 仅由辅助任务驱动
+        会导致 SceneTransformer + LayerNorm 把整帧所有节点的 hidden 表示压成
+        相同向量，进入 Stage II 后 anomaly_head 只能从常数表示中学到 bias，
+        节点级判别无法恢复。
+      - 解决方案：stage1_end=0，跳过 Stage I，从 epoch 0 起让 L0（Focal Loss
+        + adaptive α_t）参与梯度回传，backbone 始终在节点级监督下保留判别性。
+
+    Stage II（w_main=1 联合训练）：epoch 0..(stage2_end-1)
+    Stage III（w_main=1 + 冻结辅助头）：epoch stage2_end 起
+    """
+
+    def __init__(self, lr_pretrain: float = 1e-3, lr_joint: float = 1e-3,
+                 lr_finetune: float = 1e-4,
+                 stage1_end: int = 0, stage2_end: int = 30):
         self.lr_pretrain = lr_pretrain
         self.lr_joint = lr_joint
         self.lr_finetune = lr_finetune
@@ -147,6 +164,8 @@ class K_HSTGANTrainer:
         lambda1: float = 0.5,
         lambda2: float = 0.5,
         lambda3: float = 0.5,
+        focal_gamma: float = 3.0,
+        alpha_cap: float = 500.0,
     ):
         self.model = model
         self.max_epochs = max_epochs
@@ -157,6 +176,7 @@ class K_HSTGANTrainer:
         self.lambda1 = lambda1
         self.lambda2 = lambda2
         self.lambda3 = lambda3
+        self.alpha_cap = alpha_cap  # 用于 _compute_loss 中正例权重上限
 
         # 阶段调度
         self.stage_scheduler = StageScheduler()
@@ -170,8 +190,10 @@ class K_HSTGANTrainer:
         # EMA
         self.ema = ExponentialMovingAverage(model, decay=0.99)
 
-        # 损失函数
-        self.focal_loss = FocalLoss(gamma=2.0)
+        # 损失函数：gamma=3.0 让 Focal Loss 更聚焦于硬正例（hard positive）
+        # 相比默认 gamma=2.0，梯度对低置信度正例的惩罚更大，有助于提升 Recall
+        # focal_gamma 可通过构造函数参数覆盖，用于消融实验
+        self.focal_loss = FocalLoss(gamma=focal_gamma)
 
         # 早停
         self.best_f1 = 0.0
@@ -199,9 +221,9 @@ class K_HSTGANTrainer:
         # 自适应类权重 α_t = min(1, #normal / (#anomaly + ε))
         n_normal = (target_anomaly == 0).sum().float()
         n_anomaly = (target_anomaly == 1).sum().float()
-        alpha_t = torch.clamp(n_normal / (n_anomaly + 1.0), max=100.0)
+        alpha_t = torch.clamp(n_normal / (n_anomaly + 1.0), max=self.alpha_cap)
         alpha_per_sample = torch.where(target_anomaly == 0, 1.0, alpha_t.item())
-        L0 = self.focal_loss(y_anomaly, target_anomaly)
+        L0 = self.focal_loss(y_anomaly, target_anomaly, alpha=alpha_per_sample)
 
         # L1: 场景 CE（softmax，3类）
         L1 = F.cross_entropy(y_scene, target_scene.long())
