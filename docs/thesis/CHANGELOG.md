@@ -5,6 +5,38 @@
 
 ---
 
+## 2026-07-30
+
+### 实现：4 项 RSS 扩充场景规则代码落地 (Mobileye v3.0 §8.5.2/§8.5.3/§9.2/§10)
+
+将 §3.3.3.1a 论文层框架式描述的 4 条扩充 RSS 规则从公式形式落地到源码, 与基本 RSS (` RSS_R13a` / `RSS_R14a`) 形成"基本 + 扩充"双层结构. 4 条扩充规则均通过 `RuleEnforcer._rss_check_one` 末尾的扩展钩子调用 `run_rss_extended_check` 实现, 不破坏基本 RSS 与交规的现有逻辑.
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `stk/rules/rss/extended.py` | 新增 | 4 条扩充规则纯函数实现 (Cut-in / Cut-out / NPR enhanced / Construction-zone adaptive) + 规则码常量 + CZ 参数集 |
+| `stk/rules/rss/__init__.py` | 修改 | 导出 4 条扩充规则的检测函数与常量 (规则码 / 阈值 / CZ params) |
+| `stk/rules/generator.py` | 修改 | `RuleEnforcer.__init__` 增加 `enable_extended_rss` 开关 (默认 True) + 跨帧 `_speed_history` / `_lane_history` / `_cutout_buffer` 状态; `_rss_check_one` 末尾追加扩充规则调用块; `_update_state` / `reset` / `stats` 同步维护扩充跨帧状态 |
+| `tests/smoke/test_extended_rss.py` | 新增 | 8 项端到端 smoke test (初始化 / 关闭开关 / 跨帧状态 / Cut-in / Construction-zone / NPR / 开关无副作用 / stats 全字段) |
+
+**4 条扩充规则实现要点**:
+- `RSS_CUTIN` (Cut-in 切入安全距离): 通过 `_lane_history` 检测 B 是否正在变道 (`lane_history_b[-2] != lane_history_b[-1]`) + `ahead_of(B, A)` + `d_long < 1.5 × d_min_long` 三条件触发
+- `RSS_CUTOUT` (驶离缓冲): 60 帧缓冲窗口内, A 与新前车 C 的纵向距离维持基本 RSS 要求 (跨帧 `_cutout_buffer` 计数器逐帧递减)
+- `RSS_NPR_ENH` (反应不当增强): 在基本 NPR (3 帧低制动) 基础上, 增加 `brake_jerk` 速率学约束 + 速度-时间因变阈值 `v_safe = v - a_min_brake × ρ`
+- `RSS_CZ_ADAPT` (施工路段自适应): 当 `lane_type == "construction"` 时使用 `CONSTRUCTION_ZONE_PARAMS` 参数集 (ρ+0.1, 2×a_max_accel, 0.75×a_min_brake_long) 重新计算 RSS 安全距离
+
+**smoke test 验证**:
+- 8/8 PASS, 包括关键的 Test 8 双帧变道真实触发 `RSS_CUTIN` (severity=0.794, d_min_cutin=24.29m, 符合 v_A=10/v_B=8 下基本 d_min×1.5 的理论值)
+- 175 项相关单元测试 (含 `test_rules_regression`) 全通过, 0 回归
+- 全套 pytest 475 passed, 仅 5 项 neo4j 环境依赖失败 + 1 项 pygame 失败, 均与本改动无关
+
+**接口设计**:
+- `RuleEnforcer(enable_extended_rss=True)` 默认启用, 对现有调用方零影响
+- `enable_extended_rss=False` 时仅执行基本 RSS, 用于消融对照实验
+- 扩充规则 SafetyViolation 的 `rule_layer="RSS"` (与现有枚举兼容), `rule_code ∈ {RSS_CUTIN, RSS_CUTOUT, RSS_NPR_ENH, RSS_CZ_ADAPT}`
+- 4 条扩充规则的 `extra_attrs` 包含各自的物理参数 (d_min_cutin / d_min_long_new / npr_reason / cz_d_min_long 等), 便于下游 K-HSTGAN 注意力回溯
+
+---
+
 ## 2026-07-29
 
 ### 论文修订：新增 4 项 RSS 扩充场景规则（论文层框架式描述，未实现代码）

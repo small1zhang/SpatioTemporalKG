@@ -28,6 +28,12 @@ from stk.rules.relations import (
 	responsible_for, caused_by,
 )
 from stk.rules.rss.model import run_rss_check, DEFAULT_RSS_PARAMS
+from stk.rules.rss.extended import (
+	run_rss_extended_check,
+	RSS_CUTIN_RULE_CODE, RSS_CUTOUT_RULE_CODE,
+	RSS_NPR_ENH_RULE_CODE, RSS_CZ_ADAPT_RULE_CODE,
+	EXTENDED_RSS_RULE_CODES,
+)
 from stk.rules.traffic.rules import (
 	check_R1_pedestrian_priority,
 	check_R2_red_light,
@@ -53,13 +59,23 @@ class RuleEnforcer:
 	  _sv_counter: dict, 记录已发出的 SafetyViolation 计数
 	  _brake_history: {veh_id: [brake_values]}, 制动历史用于 NoProperResponse 判定
 	  _stop_duration: {veh_id: frames}, 静止持续帧数
+	  _speed_history: {veh_id: [speed_values]}, 速度历史用于 NPR 增强判定 (§3.3.3.1a 公式 3.17c)
+	  _lane_history: {veh_id: [lane_ids]}, 车道历史用于 cut-in/cut-out 识别 (§3.3.3.1a 公式 3.17a/3.17b)
+	  _cutout_buffer: {(ego_id, front_id): remaining_frames}, cut-out 缓冲窗口计数器 (§3.3.3.1a 公式 3.17b)
+	  _enable_extended_rss: bool, 是否启用 4 条扩充 RSS 规则 (默认 True)
 	"""
 
-	def __init__(self, rss_params=None, ego_config: Optional[EgoCentricConfig] = None):
+	def __init__(self, rss_params=None, ego_config: Optional[EgoCentricConfig] = None,
+				 enable_extended_rss: bool = True):
 		self._rss_params = rss_params or dict(DEFAULT_RSS_PARAMS)
 		self._sv_counter: int = 0
 		self._brake_history: Dict[str, List[float]] = {}
 		self._stop_duration: Dict[str, int] = {}
+		# 扩充规则跨帧状态 (§3.3.3.1a)
+		self._speed_history: Dict[str, List[float]] = {}
+		self._lane_history: Dict[str, List[str]] = {}
+		self._cutout_buffer: Dict[Tuple[str, str], int] = {}
+		self._enable_extended_rss = enable_extended_rss
 		# 阶段1: EgoCentric ROI 过滤
 		self._ego_config = ego_config or EgoCentricConfig.default()
 		self._ego_filter = (
@@ -464,8 +480,89 @@ class RuleEnforcer:
 					reason="no_proper_response",
 				))
 
+		# §3.3.3.1a 扩充规则: 在基本 RSS 检查之后追加 4 条扩充场景规则
+		# (仅当 enable_extended_rss=True 且 dangerous 已触发时执行)
+		if not self._enable_extended_rss:
+			return
+		# NPR 增强 / Cut-in / Cut-out / Construction zone, 借助跨帧状态
+		# Cut-in: 通过 _lane_history 检测 B 是否正在变道
+		# _update_state 已先于 _rss_check_one 调用, 故 _lane_history_b[-1] = 当前帧 lane_id,
+		# _lane_history_b[-2] = 上一帧 lane_id; 若两者不同则 B 正在变道
+		lane_b = str(v_b.get("lane_id", "0"))
+		lane_history_b = self._lane_history.get(eid_b, [])
+		is_changing_lane = (
+			len(lane_history_b) >= 2
+			and lane_b != "0"
+			and lane_history_b[-2] != lane_history_b[-1]  # 上一帧 != 当前帧 → 正在变道
+		)
+		# ahead_of(B, A): B 在 A 的前方 (B 的 location_x > A 的 location_x, 假设车头朝 +x)
+		ahead_of = (v_b.get("location_x", 0) - v_a.get("location_x", 0)) > 0
+		# Cut-out: 是否处于 (A, B) 的 cutout 缓冲窗口内
+		is_exit_lane_buffer = self._cutout_buffer.get((eid_a, eid_b), 0) > 0
+		# Construction zone: 通过车辆 lane_type 字段判断 (CARLA 默认无, 仅作 hook)
+		is_construction_zone = (
+			str(v_a.get("lane_type", "")).lower() == "construction"
+			or str(v_b.get("lane_type", "")).lower() == "construction"
+		)
+		speed_vals = self._speed_history.get(eid_a, [])
+		ext_rss = run_rss_extended_check(
+			d_long=d_long, d_lat=d_lat,
+			v_A=speed_a, v_B=speed_b,
+			v_lat_A=v_lat_a, v_lat_B=v_lat_b,
+			brake_values=brake_vals,
+			speed_values=speed_vals,
+			is_changing_lane=is_changing_lane,
+			ahead_of=ahead_of,
+			is_exit_lane_buffer=is_exit_lane_buffer,
+			d_long_new_front=None,
+			v_new_front=None,
+			is_construction_zone=is_construction_zone,
+			params=self._rss_params,
+		)
+
+		# 将触发的扩充规则写入 SafetyViolation + violates + definedBy
+		from stk.rules.rss.extended import EXTENDED_PRED_NAMES
+		extended_results = [
+			(ext_rss["is_cutin_violation"],      "RSS_CUTIN",    ext_rss["cutin_severity"],
+			 {"d_min_cutin": ext_rss["d_min_cutin"]}),
+			(ext_rss["is_cutout_violation"],     "RSS_CUTOUT",   ext_rss["cutout_severity"],
+			 {"d_min_long_new": ext_rss["d_min_long_new"]}),
+			(ext_rss["is_npr_enhanced"],         "RSS_NPR_ENH",  ext_rss["npr_enh_severity"],
+			 {"npr_reason": ext_rss["npr_enh_reason"]}),
+			(ext_rss["is_cz_adapt_violation"],   "RSS_CZ_ADAPT", ext_rss["cz_adapt_severity"],
+			 {"cz_d_min_long": ext_rss["cz_d_min_long"],
+			  "cz_d_min_lat": ext_rss["cz_d_min_lat"],
+			  "cz_reason": ext_rss["cz_adapt_reason"]}),
+		]
+		for is_viol, rule_code, sev, extra_attrs in extended_results:
+			if not is_viol:
+				continue
+			pred_name = EXTENDED_PRED_NAMES.get(rule_code, rule_code)
+			sv_id = make_sv_id(rule_code, frame_id, eid_a, eid_b)
+			sv = SafetyViolation(
+				entity_id=sv_id,
+				rule_code=rule_code, rule_name=pred_name,
+				rule_layer="RSS", frame_id=frame_id, severity=sev,
+				src_id=eid_a, dst_id=eid_b,
+				predicate_str=f"{pred_name}({eid_a}, {eid_b}, Frame_{frame_id})",
+				evidence_path=[f"scene_rel_{eid_a}_{eid_b}_{frame_id}"],
+				rule_parameters=dict(self._rss_params),
+				extra_attrs=extra_attrs,
+			)
+			violations.append(sv)
+			violation_rels.append(violates(
+				src_entity_id=eid_a, dst_entity_id=eid_b,
+				frame_id=frame_id, valid_from=frame_id,
+				rule_code=rule_code, predicate=pred_name,
+				sv_id=sv_id, severity=sev,
+			))
+			defined_by_rels.append(defined_by(
+				sv_id=sv_id, rule_id=rule_code,
+				frame_id=frame_id, valid_from=frame_id,
+			))
+
 	def _update_state(self, vehicles, frame_id):
-		"""更新跨帧状态 (制动历史、静止时长)."""
+		"""更新跨帧状态 (制动历史、静止时长、扩充规则跨帧状态)."""
 		for v in vehicles:
 			eid = v.get("entity_id", "")
 			if not eid:
@@ -477,20 +574,47 @@ class RuleEnforcer:
 				history.pop(0)
 
 			speed = v.get("speed", 0.0)
+			# 扩充规则: 速度历史
+			speed_hist = self._speed_history.setdefault(eid, [])
+			speed_hist.append(speed)
+			if len(speed_hist) > 30:
+				speed_hist.pop(0)
+
+			# 扩充规则: 车道历史
+			lane = str(v.get("lane_id", "0"))
+			lane_hist = self._lane_history.setdefault(eid, [])
+			lane_hist.append(lane)
+			if len(lane_hist) > 60:
+				lane_hist.pop(0)
+
 			if speed < 0.3:
 				self._stop_duration[eid] = self._stop_duration.get(eid, 0) + 1
 			else:
 				self._stop_duration[eid] = 0
 
+		# 扩充规则: Cut-out 缓冲窗口递减
+		expired = [k for k, v in self._cutout_buffer.items() if v <= 1]
+		for k in expired:
+			del self._cutout_buffer[k]
+		for k in self._cutout_buffer:
+			self._cutout_buffer[k] -= 1
+
 	def reset(self):
 		self._sv_counter = 0
 		self._brake_history.clear()
 		self._stop_duration.clear()
+		self._speed_history.clear()
+		self._lane_history.clear()
+		self._cutout_buffer.clear()
 
 	def stats(self):
 		return {
 			"n_brake_history": len(self._brake_history),
 			"n_stop_tracked": len(self._stop_duration),
+			"n_speed_history": len(self._speed_history),
+			"n_lane_history": len(self._lane_history),
+			"n_cutout_buffer": len(self._cutout_buffer),
+			"enable_extended_rss": self._enable_extended_rss,
 		}
 
 
