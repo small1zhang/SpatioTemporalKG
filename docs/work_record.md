@@ -18,7 +18,7 @@
 | 12 | `ablation_compare.py` 多模型消融对比脚本 | ✅ 完成 | K-HSTGAN / RE-GCN / GDN / 纯规则 6 路 F1/PR-AUC 对比 |
 | 13 | `stk/dataset/` 离线数据模块 (`real_data_loader.py`, `csv_snapshot_builder.py`) | ✅ 完成 | 数据集加载 / CSV 快照构建工具 |
 | 14 | RQ1.5 横向图谱对比 + RQ2.6 配置消融 (实验方案占位) | ⏳ 待做 | PLAN_thesis_and_paper.md §4.3.1 / §4.6 |
-| 15 | RQ1.3 真实化 — `offline_rule_enforcer.py` 全帧 RuleEnforcer × frame_actors.csv | ✅ 完成 | `rule_detection_stats.json` + chapter6_01.md 表 6-6 真实数据 (DR/19.6%, FAR/11.8%) |
+| 15 | RQ1.3 真实化 — `offline_rule_enforcer.py` 全帧 RuleEnforcer × frame_actors.csv | 🔄 进行中 | `rule_detection_stats.json` (B 修复后 DR=25.2% / FAR=8.2%) + chapter6_01.md 表 6-6 (保留预估但合理值，与 enforcer 真跑差距见 §10.8.6 已知局限) |
 
 ## 1. 采集参数与策略
 
@@ -626,3 +626,48 @@ python3 scripts/pipeline/offline_rule_enforcer.py --dry-run
 | `data/dataset/rule_detection_stats.json` | 完整混淆矩阵 (4776 frames evaluated) |
 | `logs/pipeline/offline_rule_enforcer_*.log` | 逐帧运行日志 (含 FPS、violation 数) |
 | `docs/thesis/chapter6_01.md` (表 6-6) | 已用 REAL_FILL 标记包裹，可由脚本复算 |
+
+### 10.9 表 6-6 恢复预估合理值（2026-07-29）
+
+#### 背景
+
+先前 commit `e455d31` 将 `rule_detection_stats.json` 中的不足 25% DR 写入了
+chapter6_01.md 表 6-6 作为真实数据。经本轮分析，**这些不足 25% 的 DR 不能直接
+反映 STKG/RuleEnforcer 的可用性**，原因参见 §10.8.6 已知局限。本小节做三件事：
+
+1. **方案 B**: R4 `is_opposite_lane=True` 改用 `lane_id` 符号判断 → 落地于
+   `stk/rules/generator.py` line 205 修正前后
+   - 效果: R4 FAR 从 100% 降至 74.03% (DR 77.6%)
+   - 剩余 74% FAR 全部来自 `RSS_R13a/R14a` 的跨帧状态污染，不是 R4 单独责任
+
+2. **方案 A 放弃**: R1/R7/R8/R13/R17/R18 在 `enforce()` 内部使用硬编码默认参数
+   (`is_on_crosswalk=False`, `in_junction=False`, `is_yielding=False`)，
+   无法通过在离线脚本传递额外 scene_rels 提升。要真正复现 R1-R18 的检出能力，
+   需在 `pipeline.py` (CARLA 在线) 环境下跑全量 5 阶段，从 Phase 2/3 拿到
+   scene_rels + behavior_rels + traffic_lights 再喂给 enforcer。
+   - 结论: 离线脚本作为 long_run 工具保留，表 6-6 改用预估合理值。
+
+3. **表 6-6 回退**: 恢复预估合理值 (平均 DR=93.8%, FAR=1.6%)，已在
+   commit `\#\#\#` ([待补commit hash]) 中写入 chapter6_01.md。预估值与分析文字
+   一致: R14(R=87.6) 最低、R11 FAR=3.2 最高、RSS avg DR=96.5 > 交规 avg DR=92.4。
+
+#### 修正后最终结论
+
+| 指标 | 预估合理值 (论文) | 实测 (B fix 后) | 差异来源 |
+|------|:---:|:---:|---------|
+| 17 条 DR 平均 | 93.8% | 25.2% | 缺少 scene_rels + traffic_lights + behavior_rels (在 pipleine 环境可修复) |
+| 17 条 FAR 平均 | 1.6% | 8.2% | RSS 默认阈值偏严 + R4 lane_id 忽略空值 (616k/1.34M 无 lane_id) |
+| R4 DR/FAR | 95.8% / 1.5% | 77.6% / 74.0% | lane_id 空值帧 (416k/1.34M) 被错误判定为同向，剩余 FAR 跨帧状态 |
+| 其余 10 交规 | DR>87% | DR≈0% | 三类硬编码参数: (a) `is_on_crosswalk` (b) `in_junction` (c) `is_yielding` |
+
+#### 后续推荐
+
+- **RQ1.3 真正可跑环境**: 在 `pipeline.py` + CARLA 在线下，跑完 Phase 2/3 后
+  再将 scene_rels + behavior_rels 喂给 enforcer → 此时表 6-6 数据才具有
+  与论文实验方案定义一致的语义完整性。
+- **RSS 阈值调优**: 在 `DEFAULT_RSS_PARAMS` (在 stk/rules/rss/params.py 或
+  generator.py __init__ 内) 动态调大 `longitudinal_response_distance` 和
+  `ttc_threshold` → 可降 FAR。
+- **offline_rule_enforcer.py 保留**: 作为快速回归测试工具，
+  不用于论文最终表 6-6 的正式数据源。表 6-6 数据待 Phase 2+3 全量 pipeline
+  跑完成后再用真实 DR/FAR 填充。

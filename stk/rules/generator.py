@@ -203,7 +203,17 @@ class RuleEnforcer:
 								   rule_parameters={"crossed_solid": False, "is_changing_lane": is_changing})
 
 				# R4 对向会车
-				is_v, sev, _ = check_R4_opposite_meeting(v_a, v_b, dist, is_opposite_lane=True)
+				# 用 lane_id 符号判断是否真的对向行驶 (B, sec 4.15.4)
+				lane_a = str(v_a.get("lane_id", "0"))
+				lane_b = str(v_b.get("lane_id", "0"))
+				try:
+					is_opposite_lane = int(lane_a) * int(lane_b) < 0
+				except (ValueError, TypeError):
+					is_opposite_lane = False
+				if is_opposite_lane:
+					is_v, sev, _ = check_R4_opposite_meeting(v_a, v_b, dist, is_opposite_lane=True)
+				else:
+					is_v, sev, _ = False, 0.0, {}
 				if is_v and eid_a and eid_b:
 					_add_violation("R4", "OppositeMeetingViolation", "TrafficLaw",
 								   eid_a, eid_b, eid_b, frame_id, sev, violations,
