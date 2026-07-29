@@ -950,4 +950,40 @@ Town04/05 的行人外观差异导致 FPR=7.14–10.38%，可通过阈值调整�
 | `scripts/long_run/eval_cross_town.py` | 跨 Town 评估脚本（含 `build_town_subset`） |
 | `exp_results/realdata/cross_town_eval_full.json` | 完整跨 Town 评估结果 |
 | `docs/thesis/chapter6_01.md §6.7` | 替换为真实跨 Town OOD 评估表 |
-| `docs/work_record.md §12` | **本小节**
+| `docs/work_record.md §12` | **本小节** |
+
+### 12.7 GitHub 同步
+
+2026-07-29 将本会话全部改动推送至 GitHub。
+
+**分支**: `feat/rss-viz-panel-plus-pipeline-fix`
+**仓库**: `github.com/small1zhang/SpatioTemporalKG`
+**PR**: `https://github.com/small1zhang/SpatioTemporalKG/pull/new/feat/rss-viz-panel-plus-pipeline-fix`
+
+**推送的 8 个 commit（自 origin/master 起）：**
+
+| SHA | 说明 |
+|-----|------|
+| `f2b3c0e` | feat(train): 4 项 bug 修复 + 消融框架 + PR 扫描 |
+| `bb8e46f` | docs(§6.4): 消融 + PR 曲线写入 chapter6 |
+| `de65994` | docs(thesis): RSS 公式三方对齐 |
+| `1141d5a` | docs(thesis): 第二轮审稿修复 |
+| `5b905b8` | feat(eval): 跨 Town 评估 + §6.7 |
+| `683ea15` | docs: cross_town 结果入库 + .gitignore 例外 |
+| `0286997` | docs(thesis): RSS 场景规则扩充 |
+| `ac66b8f` | docs(§6): 21 个实验数据文件统一归档 |
+
+**归档数据**: `docs/thesis/exp_data/` (184 KB, 21 文件)
+```
+main_results/     → §6.4.2 表 6-13 (v6 41K 主结果 + 训练曲线)
+ablation/{A-D}/   → §6.4.3 表 6-13 续 (4 组消融 results + history)
+pr_curve/         → §6.4.4 表 6-13 续 2 (38 阈值 PR 扫描)
+cross_town/       → §6.7 表 6-18 (4 Town OOD + ID 基线)
+logs/             → 7 份训练/评估日志 (21 KB)
+```
+
+**论文同步状态**：
+- §6.4.2 表 6-13: ✅ 主结果（v6 F1=1.000 保留，基线待补）
+- §6.4.3 表 6-13 续: ✅ 4 组消融 A/B/C/D
+- §6.4.4 表 6-13 续 2 + 图 6-1: ✅ 38 阈值扫描
+- §6.7 表 6-18: ✅ 跨 Town OOD 评估替换了旧预估交叉验证
