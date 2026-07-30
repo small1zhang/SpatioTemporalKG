@@ -131,10 +131,10 @@ def eval_dataset(model, ds, device, threshold=0.15, town_tag=""):
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Cross-town OOD evaluation")
-    parser.add_argument("--checkpoint", default="exp_results/realdata/model.pt")
+    parser.add_argument("--checkpoint", default="exp_results/main_v6/checkpoint/model_41K_f1_1.000.pt")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--threshold", type=float, default=0.15)
-    parser.add_argument("--output", default="exp_results/realdata/cross_town_eval.json")
+    parser.add_argument("--output", default="exp_results/cross_town/eval_full.json")
     parser.add_argument("--max-frames-per-town", type=int, default=None,
         help="limit per-town frames for quick eval (default full)")
     parser.add_argument("--max-actors", type=int, default=30, help="default 30 to match training")

@@ -1,0 +1,38 @@
+========================================================================
+K-HSTGAN Real CARLA Data Experiment
+  device=cuda:0, max_actors=25, epochs=3
+========================================================================
+
+[1/5] Loading real CARLA data...
+  Mode: max_frames=2000
+  train: 2000 frames, val: 2000, test: 2000
+  Data loading: 59.0s
+
+[2/5] Dataset stats (sampled first 50 frames):
+  train: 2000 frames, avg_nodes=20.2, avg_edges=100.8, anom_nodes(sampled)=0
+  val: 2000 frames, avg_nodes=10.8, avg_edges=53.9, anom_nodes(sampled)=0
+  test: 2000 frames, avg_nodes=10.8, avg_edges=53.9, anom_nodes(sampled)=0
+
+[3/5] Initializing K-HSTGAN model...
+  Model: 132,607 parameters
+
+[4/5] Training...
+===============================================================================================
+  ep  stage     loss      L0      L1   g_norm |  val_P  val_R  val_F1  val_acc  val_loss
+-----------------------------------------------------------------------------------------------
+   0      2   0.9446  0.0394  0.5648   0.0000 |  1.000  1.000   1.000    1.000    0.0554 [38.0s]
+   1      2   0.8964  0.0121  0.5624   0.0000 |  1.000  1.000   1.000    1.000    0.2060 [39.4s]
+   2      2   0.8896  0.0093  0.5624   0.0000 |  1.000  1.000   1.000    1.000    0.0772 [37.3s]
+
+[5/5] Evaluation on test set...
+
+========================================================================
+RESULTS
+========================================================================
+  Test:  P=1.000  R=0.727  F1=0.842  acc=0.997
+  TP=378 FP=0 TN=48616 FN=142
+  Best val F1: 1.000
+  Train time:  114.7s
+  Saved: /home/aisecurity/01_ZHB/SpatioTemporalKG/exp_results/realdata/results.json
+========================================================================
+{'test': {'P': 1.0, 'R': 0.7269, 'F1': 0.8419, 'accuracy': 0.9971, 'val_loss': 0.06651197653263807, 'TP': 378, 'FP': 0, 'TN': 48616, 'FN': 142, 'n_total': 49136}, 'best_val_f1': 1.0, 'epochs_ran': 3, 'train_time_sec': 114.7252049446106, 'config': {'max_actors': 25, 'epochs': 3, 'lr': 0.001, 'device': 'cuda:0', 'train_frames': 2000, 'val_frames': 2000, 'test_frames': 2000}}

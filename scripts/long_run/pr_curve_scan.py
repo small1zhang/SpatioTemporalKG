@@ -5,12 +5,12 @@
 用法:
     python scripts/long_run/pr_curve_scan.py  \
         --max-frames 2000 \
-        --checkpoint exp_results/realdata/model.pt  \
+        --checkpoint exp_results/main_v6/checkpoint/model_41K_f1_1.000.pt  \
         --output pr_curve_2000f.json
 
     python scripts/long_run/pr_curve_scan.py  \
         --all \
-        --checkpoint exp_results/realdata/model.pt  \
+        --checkpoint exp_results/main_v6/checkpoint/model_41K_f1_1.000.pt  \
         --output pr_curve_all.json
 """
 from __future__ import annotations
@@ -76,7 +76,7 @@ def evaluate_at_threshold(model, ds, device, threshold, n_samples=None):
 
 def main():
     parser = argparse.ArgumentParser(description="PR-curve threshold scan")
-    parser.add_argument("--checkpoint", default="exp_results/realdata/model.pt",
+    parser.add_argument("--checkpoint", default="exp_results/main_v6/checkpoint/model_41K_f1_1.000.pt",
                         help="Path to trained model checkpoint")
     parser.add_argument("--output", default="pr_curve_scan.json",
                         help="Output JSON file path")

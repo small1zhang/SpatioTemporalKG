@@ -1,0 +1,12 @@
+{
+  "resolve_distribution": {
+    "consistent": 0,
+    "trust_GNN": 0,
+    "trust_rule": 0,
+    "needs_review": 0,
+    "anomaly": 7,
+    "normal": 2
+  },
+  "K_mean": 0.1659,
+  "K_std": 0.2064
+}

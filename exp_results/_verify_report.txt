@@ -1,0 +1,46 @@
+K-HSTGAN 第 6 章实验数据审查报告
+==================================================================
+Report generated: 2026-07-30
+Pass: 37 | Fail: 0
+==================================================================
+
+✅ [PASS] main_v6/checkpoint/model_41K_f1_1.000.pt (539 KB)  | 存在
+✅ [PASS] main_v6/checkpoint/results.json (457 bytes)  | 存在
+✅ [PASS] main_v6/checkpoint/history.json (9571 bytes)  | 存在
+✅ [PASS]   └─ main_v6/checkpoint/results.json: JSON 可正常解析
+✅ [PASS]     ├─ P=1.0000 R=1.0000 F1=1.0000  | 论文 §6.4.2 表 6-13 ✓
+✅ [PASS]     └─ TP=1050 FP=0 FN=0 TN=99864  | 论文 §6.4.2 ✓
+✅ [PASS]   └─ results.json F1=1.000  | 与文件名 F1=1.000 一致 ✓
+✅ [PASS] ablation/A_no_oversample/checkpoint/model_A_no_oversample_f1_0.842.pt (539 KB)  | 存在
+✅ [PASS] ablation/A_no_oversample/results.json (465 bytes)  | 存在
+✅ [PASS] ablation/A_no_oversample/history.json (9628 bytes)  | 存在
+✅ [PASS]   └─ ablation/A_no_oversample/results.json: JSON 可正常解析
+✅ [PASS]     └─ results.json F1=0.842
+✅ [PASS]   └─ results.json F1=0.842  | 与文件名 F1=0.842 一致 ✓
+✅ [PASS] ablation/B_no_skipconn/checkpoint/model_B_no_skipconn_f1_0.021.pt (539 KB)  | 存在
+✅ [PASS] ablation/B_no_skipconn/results.json (465 bytes)  | 存在
+✅ [PASS] ablation/B_no_skipconn/history.json (9669 bytes)  | 存在
+✅ [PASS]   └─ ablation/B_no_skipconn/results.json: JSON 可正常解析
+✅ [PASS]     └─ results.json F1=0.021
+✅ [PASS]   └─ results.json F1=0.021  | 与文件名 F1=0.021 一致 ✓
+✅ [PASS] ablation/C_gamma2/checkpoint/model_C_gamma2_f1_0.842.pt (539 KB)  | 存在
+✅ [PASS] ablation/C_gamma2/results.json (465 bytes)  | 存在
+✅ [PASS] ablation/C_gamma2/history.json (9547 bytes)  | 存在
+✅ [PASS]   └─ ablation/C_gamma2/results.json: JSON 可正常解析
+✅ [PASS]     └─ results.json F1=0.842
+✅ [PASS]   └─ results.json F1=0.842  | 与文件名 F1=0.842 一致 ✓
+✅ [PASS] ablation/D_alpha100/checkpoint/model_D_alpha100_f1_1.000.pt (539 KB)  | 存在
+✅ [PASS] ablation/D_alpha100/results.json (454 bytes)  | 存在
+✅ [PASS] ablation/D_alpha100/history.json (9570 bytes)  | 存在
+✅ [PASS]   └─ ablation/D_alpha100/results.json: JSON 可正常解析
+✅ [PASS]     └─ results.json F1=1.000
+✅ [PASS]   └─ results.json F1=1.000  | 与文件名 F1=1.000 一致 ✓
+✅ [PASS] pr_curve/scan_v6_41K.json (11349 bytes)  | 存在
+✅ [PASS]   └─ 共 21 个阈值采样点  | 覆盖区间 [0.01, 0.46]  ✓
+✅ [PASS]   └─ 完美平台: 16 个阈值在 F1=1.000  | 论文 §6.4.4 表 6-13 续 2 一致  ✓
+✅ [PASS] cross_town/eval_full.json (4484 bytes)  | 存在
+✅ [PASS]   └─ OOD 合计 FP=470 TN=10130 n_neg=10600 FPR=0.0443  | 论文 §6.7 表 6-18: FPR≈4.43%  ✓
+✅ [PASS]   └─ ID (Town10HD test) F1=1.0000  | 域内测试完美  ✓
+
+==================================================================
+End of report

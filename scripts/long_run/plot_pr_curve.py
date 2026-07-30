@@ -19,7 +19,7 @@ plt.rcParams.update({
     "figure.dpi": 150,
 })
 
-DATA = Path("exp_results/realdata/pr_curve_scan_v6_41K.json")
+DATA = Path("exp_results/pr_curve/scan_v6_41K.json")
 OUT = Path("docs/figures/pr_curve_v6_41K.png")
 OUT.parent.mkdir(parents=True, exist_ok=True)
 

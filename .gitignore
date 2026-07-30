@@ -22,8 +22,19 @@ logs/
 *.parquet
 *.csv
 *.json
+# 模型权重文件不入版本（可用脚本一键重训复现）
+*.pt
+
 # Exception: 论文章节附属实验数据 JSON (论文表/图原始来源，体量小且需入版本)
 !docs/thesis/exp_data/**
+
+# Exception: exp_results/ 下的 JSON / 日志 / Markdown / verify_data.py 入版本
+# 注意: 必须显式取反 `logs/` 目录规则，否则 exp_results/.../logs/ 会被父规则吞掉
+!exp_results/**/logs/
+!exp_results/**/*.json
+!exp_results/**/*.log
+!exp_results/**/*.md
+!exp_results/verify_data.py
 
 # Environment
 .env
@@ -35,11 +46,11 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
 # backups
 *.bak.*
 stk/viz/kg_dashboard_ref.py
-exp_results/
-exp_results/
+
 viz_output/*.html
 viz_output/*.json
 viz_output/*.css
