@@ -177,6 +177,24 @@ def process_chunks(
 
     total_frames = 0
 
+    # ---- RQ2 性能计数器 (§10.6 任务#3, 表 6-8/9/10/11 真实化) ----
+    # 跨 chunk 累积各 phase 总耗时 (秒) 与帧数, 运行结束输出 perf_metrics.json
+    perf_t = {
+        "phase2_extract": 0.0,    # Phase 2: actor/TL/weather 提取
+        "phase2_spatial": 0.0,    # Phase 2: 空间关系计算 + FrameData
+        "phase3_behavior": 0.0,   # Phase 3: BehaviorRelationGenerator
+        "phase3_rules": 0.0,      # Phase 3: RuleEnforcer
+        "phase4_engine": 0.0,      # Phase 4: IncrementalEngine.process_frame
+        "phase5_serialize": 0.0,   # Phase 5: serialize_graph (单次)
+    }
+    perf_n = {
+        "phase2_extract": 0, "phase2_spatial": 0,
+        "phase3_behavior": 0, "phase3_rules": 0,
+        "phase4_engine": 0,
+    }
+    # 输出路径: out_dir/perf_metrics.json
+    perf_out_path = Path(out_dir) / "perf_metrics.json" if out_dir else None
+
     # 清空临时文件 (首次写)
     if tmp_phase2 and tmp_phase2.exists():
         tmp_phase2.unlink()
@@ -240,6 +258,8 @@ def process_chunks(
         for raw in chunk_data:
             fid = raw["frame_id"]
 
+            # Phase 2a: actor/TL/weather 提取 (RQ2 perf)
+            _t0 = time.perf_counter()
             # Phase 2 转换 (若需要提取)
             if needs_extraction:
                 actors = extract_all_actors(raw)
@@ -265,7 +285,11 @@ def process_chunks(
                           "pedestrians": raw.get("pedestrians", [])}
                 tl = raw.get("traffic_lights", [])
                 weather = raw.get("weather", {})
+            perf_t["phase2_extract"] += time.perf_counter() - _t0
+            perf_n["phase2_extract"] += 1
 
+            # Phase 2b: 空间关系计算 (RQ2 perf)
+            _t0 = time.perf_counter()
             # 空间关系 (每帧使用 static lanes)
             from types import SimpleNamespace
             vehs_raw = actors.get("vehicles", [])
@@ -346,7 +370,11 @@ def process_chunks(
                 "weather": weather,
             }
             chunk_phase2.append(snap_dict)
+            perf_t["phase2_spatial"] += time.perf_counter() - _t0
+            perf_n["phase2_spatial"] += 1
 
+            # Phase 3a: 行为检测 (RQ2 perf)
+            _t0 = time.perf_counter()
             # Phase 3: 行为 + 规则
             veh_str = [{**v, "entity_id": str(v.get("entity_id", v.get("id", "")))}
                        for v in snap_dict["vehicles"]]
@@ -363,7 +391,11 @@ def process_chunks(
             chunk_interactions_raw.extend(beh_out.get("interactions", []))
             chunk_behavior_rels_raw.extend(beh_out.get("behavior_rels", []))
             chunk_cross_layer_rels_raw.extend(beh_out.get("cross_layer_rels", []))
+            perf_t["phase3_behavior"] += time.perf_counter() - _t0
+            perf_n["phase3_behavior"] += 1
 
+            # Phase 3b: 规则检测 (RQ2 perf)
+            _t0 = time.perf_counter()
             rule_out = rule_enf.enforce(
                 frame_id=fid, vehicles=veh_str, pedestrians=ped_str,
                 traffic_lights=tl_str, scene_rels=snap_dict.get("scene_rels", []),
@@ -373,9 +405,14 @@ def process_chunks(
                 "violations": rule_out.get("violations", []),
                 "responsibilities": rule_out.get("responsibilities", []),
             })
+            perf_t["phase3_rules"] += time.perf_counter() - _t0
+            perf_n["phase3_rules"] += 1
 
-            # Phase 4: 增量 (跨 chunk 复用 engine)
+            # Phase 4: 增量 (跨 chunk 复用 engine) (RQ2 perf)
+            _t0 = time.perf_counter()
             engine.process_frame(snap_dict)
+            perf_t["phase4_engine"] += time.perf_counter() - _t0
+            perf_n["phase4_engine"] += 1
 
             total_frames += 1
 
@@ -576,7 +613,47 @@ def process_chunks(
             pass
 
     tim = time.time() - t0
+    perf_t["phase5_serialize"] = tim
     print(f"[OK] Phase5 done ({tim:.1f}s) total_nodes={total_nodes} total_edges={total_edges_g}")
+
+    # ---- RQ2 性能指标输出 (§10.6 任务#3, 表 6-8/9/10/11) ----
+    # 计算每帧均耗 (ms/frame) + 总吞吐 (FPS), 写 perf_metrics.json
+    import statistics as _stat
+    total_per_run = sum(perf_t.values())
+    total_frames_per_run = total_frames if total_frames > 0 else 1
+    perf_metrics = {
+        "total_frames": total_frames,
+        "total_time_s": round(total_per_run, 3),
+        "throughput_fps": round(total_frames_per_run / total_per_run, 2) if total_per_run > 0 else 0.0,
+        "phase_breakdown_sec": {k: round(v, 3) for k, v in perf_t.items()},
+        "phase_per_frame_ms": {
+            k: round(perf_t[k] / perf_n[k] * 1000.0, 3) if perf_n[k] > 0 else 0.0
+            for k in perf_n
+        },
+        "phase_call_counts": dict(perf_n),
+    }
+    # 各帧均耗 sum (≈单帧总耗时, ms)
+    perf_metrics["total_per_frame_ms"] = round(
+        sum(perf_metrics["phase_per_frame_ms"].values()), 3
+    )
+    # 表 6-9/10/11 等 RQ2 列直接对应"单帧均耗 + 总吞吐"
+    if perf_out_path is not None:
+        try:
+            perf_out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(perf_out_path, "w", encoding="utf-8") as f:
+                json.dump(perf_metrics, f, ensure_ascii=False, indent=2)
+            print(f"[+] perf_metrics saved: {perf_out_path}")
+            print(f"    total_frames={total_frames}, total_time={total_per_run:.1f}s, "
+                  f"throughput={perf_metrics['throughput_fps']} fps")
+            print(f"    per-frame (ms): "
+                  f"P2ext={perf_metrics['phase_per_frame_ms']['phase2_extract']:.2f}, "
+                  f"P2spat={perf_metrics['phase_per_frame_ms']['phase2_spatial']:.2f}, "
+                  f"P3beh={perf_metrics['phase_per_frame_ms']['phase3_behavior']:.2f}, "
+                  f"P3rule={perf_metrics['phase_per_frame_ms']['phase3_rules']:.2f}, "
+                  f"P4eng={perf_metrics['phase_per_frame_ms']['phase4_engine']:.2f}, "
+                  f"P5ser={perf_t['phase5_serialize']:.1f}s (one-time)")
+        except Exception as e:
+            print(f"[!] perf_metrics write failed: {e}")
 
 
 # ------------- Pipeline Checkpoint -------------

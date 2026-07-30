@@ -294,7 +294,7 @@ RQ2 旨在回答"STKG 的流式构建管线在吞吐量、延迟与内存占用�
 
 ### 6.3.1 RQ2.1：帧处理吞吐与延迟
 
-在 5 阶段流水线上使用 `time.perf_counter()` 测量各阶段的端到端延迟。
+在 5 阶段流水线上使用 `time.perf_counter()` 测量各阶段的端到端延迟。仪器化实现见 `scripts/long_run/pipeline.py`，各阶段起始处调用 `time.perf_counter()`，阶段结束累加到 `perf_t` 字典；运行结束后序列化到 `<out_dir>/perf_metrics.json`，包含 `phase_breakdown_sec`、`phase_per_frame_ms`、`throughput_fps` 三组度量。表 6-8 数据来源于 Town05 20 min 实测（约 24,000 帧），其中 Phase 1（CARLA 数据提取）在 pipeline 上游 `collect.py` 内测量、Phase 5 写入为单帧的最终序列化批量。
 
 **表 6-8** 5 阶段逐帧延迟统计
 

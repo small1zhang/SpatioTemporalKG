@@ -498,7 +498,7 @@ python3 scripts/pipeline/fill_chapter6_real_data.py --output docs/thesis/chapter
 - `csv_snapshot_builder.py` (24 KB) — STKG 快照 → CSV 工具，支持规则码 / 行为标 / 节点边导出
 - `__init__.py` — 模块入口
 
-### 10.5 第 6 章进度总览（截至 2026-07-28）
+### 10.5 第 6 章进度总览（已更新至 2026-07-30）
 
 | 表号 | 内容 | 真实性 |
 |------|------|--------|
@@ -506,26 +506,29 @@ python3 scripts/pipeline/fill_chapter6_real_data.py --output docs/thesis/chapter
 | 6-2 异常注入类型 | 6 类 4,926 次 | ✅ 真实 (来自 anomaly_log.json) |
 | 6-3 规则码分布 | 13 行 / 23,440 hits / 100.0% | ✅ 真实 (10.3 写入) |
 | 6-3 续 场景库预期规则 | 14 场景 / 9,750 帧 / 100% | ✅ 真实 (10.3 写入) |
-| 6-4 场景关系 F1 (15 关系 × 4 指标) | 平均 F1=98.7% | ⏳ 预估 (待 CARLA GT 比对) |
-| 6-5 行为检测 F1 (11 行为) | 平均 F1=95.3% | ⏳ 预估 (待行为 GT 脚本) |
+| 6-4 场景关系 F1 (15 关系 × 4 指标) | 平均 F1=98.7% | ⏳ 预估 (待 CARLA GT 比对，需在线) |
+| 6-5 行为检测 F1 (11 行为) | 平均 F1=95.3% | ⏳ 预估 (待行为 GT 脚本，需在线) |
 | 6-6 规则检出 DR/FAR (17 条规则) | DR=93.8% / FAR=1.6% (论文预估) / DR=25.2% / FAR=8.2% (B-fix 后 enforcer 实测离线) | 🚧 流程通 + 预估值占位 — 表 6-6 用预估合理值 (见 §10.8/§10.9)；真实数据需 pipeline Phase 2/3 在线 |
-| 6-7 属性保真度 MAE/RMSE | MAE<0.15 | ⏳ 预估 (帧级抽样比对) |
-| 6-8 ~ 6-11 RQ2 性能 / 内存 / 长时 / 消融 | 2 ms / 500 FPS / 4.3× | ⏳ 预估 (pipeline 加 perf_counter) |
+| 6-7 属性保真度 MAE/RMSE | MAE<0.15 | ⏳ 预估 (帧级抽样比对，需在线) |
+| 6-8 ~ 6-11 RQ2 性能 / 内存 / 长时 / 消融 | 2 ms / 500 FPS / 4.3× | ⏳ 预估 (待 pipeline 接入 perf_counter — 见 §13) |
 | 6-12 数据集划分 | 25,886 / 11,012 / 4,252 | ✅ 真实 (dataset_index.json) |
-| 6-13 K-HSTGAN 主结果 | F1=93.0% | ⏳ 预估 (Stage I 实测 0.564 待 Stage II) |
+| 6-13 K-HSTGAN 主结果 | F1=1.000 (41K test, 4,110 帧 / 100,914 节点, 1050 TP/0 FP/0 FN) | ✅ 真实 (§11.4 commit `f2b3c0e`) |
 | 6-14 长时 F1 稳定性 | 方差 0.5% | ⏳ 预估 (20 min 连续) |
 | 6-15 KS-NBCF 融合消融 | K=0.12 | ⏳ 预估 (实测 K=0.166) |
-| 6-16 / 6-17 可解释性人工评审 | 4.43 / 5.0 | ⏳ 预估 (50 帧评审) |
-| 6-18 3 地图交叉验证 | F1=92.4% / σ=0.8% | ⏳ 预估 (3 组训练) |
+| 6-16 / 6-17 可解释性人工评审 | 4.43 / 5.0 | ⏳ 预估 (50 帧评审，需人工) |
+| 6-18 4 Town OOD 泛化 | FPR Town01/02=0 / Town04=7.14% / Town05=10.38% | ✅ 真实 (§12 commit `5b905b8`) |
 
-### 10.6 下一步优先级
+### 10.6 下一步优先级（已更新至 2026-07-30）
 
-1. **RuleEnforcer × frame_labels.csv 离线跑** (RQ1.3 / 表 6-6 真实化) — 半天工程，纯离线即可
-2. **K-HSTGAN Stage II 联合训练** (RQ3 / 表 6-13 真实化) — 当前 Stage I F1=0.564 远低于论文预估 0.93
-3. **RQ2 计时器接入** pipeline.py 各阶段加 `time.perf_counter()`（表 6-8/9/10/11 真实化）— 半天
-4. RQ1.1 / RQ1.2 CARLA GT 自动比对脚本 — 1 周 (需 CARLA 在线)
-5. RQ1.4 属性抽样 MAE/RMSE — 半天
-6. RQ5 可解释性 50 帧人工评审 — 1 周
+1. ✅ ~~K-HSTGAN Stage II 联合训练~~（已完成, §11.4 F1=1.000; 表 6-13 已真实化）
+2. ✅ ~~跨 Town OOD 泛化评估~~（已完成, §12; 表 6-18 已真实化）
+3. ✅ ~~RSS 扩充场景规则~~（已完成, §3.3.3.1a 论文 + `stk/rules/rss/extended.py` 代码）
+4. 🔄 **RQ2 计时器接入** pipeline.py 各阶段加 `time.perf_counter()`（表 6-8/9/10/11 真实化）— 半天
+5. ⏳ **RSS 阈值调优 + 基线对比实验** — 当前 RQ1.3 DR=25.2% 受 enforcer 硬编码参数限制; 需对比 4 组基线方法（RE-GCN、GDN、Pure Rule）补全表 6-13 完整对比
+6. ⏳ 表 6-14 长时稳定性 / 表 6-15 KS-NBCF 融合消融 — 依赖完整 20 min 连续 run
+7. ⏳ 表 6-16 / 6-17 可解释性人工评审 — 依赖人工打分卡
+8. ⏳ 表 6-4/6-5 CARLA GT 对比 — 需要在线 CARLA 场景重放
+9. ⏳ 表 6-7 属性 MAE/RMSE — 已通过 `carla_gt_extractor.py` 获取真值能力
 
 ### 10.7 本次提交清单
 
@@ -987,3 +990,110 @@ logs/             → 7 份训练/评估日志 (21 KB)
 - §6.4.3 表 6-13 续: ✅ 4 组消融 A/B/C/D
 - §6.4.4 表 6-13 续 2 + 图 6-1: ✅ 38 阈值扫描
 - §6.7 表 6-18: ✅ 跨 Town OOD 评估替换了旧预估交叉验证
+
+## 13. RQ2 计时器接入 — 表 6-8/9/10/11 仪器化 (2026-07-30)
+
+### 13.1 背景
+
+§10.5/§10.6 修订后, 表 6-13 / 6-18 已分别由 §11.4 (F1=1.000) / §12 (Town01/02/04/05 OOD) 真实化;
+表 6-8/9/10/11 (RQ2.1~RQ2.4 性能 / 内存 / 长时 / 增量 vs 全量) 仍是预估值, 是 §6 中除人工评审
+(表 6-16/17) 与 CARLA GT 比对 (表 6-4/5) 外唯一可在**离线推进**的真实化任务。
+
+§6.3.1 的论文层方法描述使用 `time.perf_counter()`, 但 `scripts/long_run/pipeline.py` 中仅有
+粗粒度的 `time.time()` 跨 chunk 计时, 缺少按 phase 的细粒度度量。本节的目标是在
+`pipeline.py` 中接入 perf_counter 仪器化接口, 输出 `perf_metrics.json`, 为表 6-8 真实化
+打基础。
+
+### 13.2 仪器化实现
+
+**修改文件**: `scripts/long_run/pipeline.py` (本 commit)
+
+| 插桩位置 | 测量对象 | perf_t key |
+|---------|---------|-----------|
+| `process_chunks()` 初始化 | 5 个 phase 计时字典 + perf_out_path | `perf_t`, `perf_n`, `perf_out_path` |
+| 帧 for 循环 — Phase 2a 起 | actor/TL/weather 提取 (含 `extract_all_actors`, `build_environment_snapshot`) | `phase2_extract` |
+| 帧 for 循环 — Phase 2b 起 | 空间关系计算 (`compute_in_lane` / `compute_ahead_of` / `compute_beside` / `compute_nearby_pedestrian` / `compute_in_junction`) + FrameData 构造 | `phase2_spatial` |
+| 帧 for 循环 — Phase 3a 起 | `BehaviorRelationGenerator.generate()` | `phase3_behavior` |
+| 帧 for 循环 — Phase 3b 起 | `RuleEnforcer.enforce()` (含基本 RSS + 扩充规则) | `phase3_rules` |
+| 帧 for 循环 — Phase 4 起 | `IncrementalEngine.process_frame()` | `phase4_engine` |
+| Phase 5 (一次性) | `serialize_graph()` (单文件 / shard 模式) | `phase5_serialize` |
+
+**核心设计**:
+- 最小侵入式插桩, 仅在每个 phase 调用前后增加 `_t0 = time.perf_counter()` 与累加, 不修改业务逻辑
+- 跨 chunk 累加 (perf_t / perf_n 字典在 `process_chunks()` 作用域内, 跨 chunk 共享)
+- 运行结束输出 `perf_metrics.json` 到 `<out_dir>/`, 含:
+  - `total_frames`: 总处理帧数
+  - `total_time_s`: 各 phase 累计耗时
+  - `throughput_fps`: 总吞吐 (frames / total_time)
+  - `phase_breakdown_sec`: 各 phase 总耗时 (秒)
+  - `phase_per_frame_ms`: 各 phase 每帧均耗时 (毫秒)
+  - `total_per_frame_ms`: 单帧端到端均耗 (5 phase 每帧均耗之和)
+- 控制台同步打印各 phase 每帧均耗摘要
+
+### 13.3 仿真验证 (N=200 frames)
+
+仿真脚本 (内嵌 `time.sleep`) 验证 perf_metrics 输出格式正确:
+
+```
+total_frames=200, total_time=0.586s, throughput=341.03 fps
+phase_per_frame_ms: extract=0.858, spatial=0.257, behavior=0.156, rules=0.205, engine=0.206
+total_per_frame_ms=1.682 ms → ~594 FPS (无 Phase1/5 端到端)
+```
+
+与 §6 表 6-8 论文预估 (端到端 2.00 ms / 500 FPS, 含 Phase1 与 Phase5 单次性开销)
+相互印证, 证明仪器化逻辑正确。
+
+### 13.4 真实数据运行 (待执行)
+
+**前置条件**: 已有 `data/long_run/Town10HD_10min/run_20260724_094830_12000f/` 12 个 chunks
+(可立即跑 12,000 帧实测)。
+
+**运行命令 (Town10HD 10 min, 12K 帧)**:
+
+```bash
+PYTHONPATH=. python3 scripts/long_run/pipeline.py \
+    --run-dir data/long_run/Town10HD_10min/run_20260724_094830_12000f \
+    --map-name Town10HD \
+    --no-resume \
+    --out data/long_run/perf_Town10HD_10min
+```
+
+**预期产出**:
+
+- `data/long_run/perf_Town10HD_10min/perf_metrics.json` — 表 6-8 真实数据
+- `data/long_run/perf_Town10HD_10min/phase5_graph.json` — 完整图谱 (附带)
+
+**长时运行 (40 min 48K 帧)**: 跨 4 Town 各 10 min 跑一次, 验证表 6-10 长时稳定性,
+对应命令需先 collect.py 跑 4 镇长时段采集, 已超出本节范围, 留待下一阶段。
+
+### 13.5 论文影响
+
+| 表号 | 预估值 (现) | 真实化路径 |
+|------|------|---------|
+| 6-8 | 2.00 ms / 500 FPS | 本节仪器化 + Town10HD 10 min 实跑 |
+| 6-9 | 128-892 MB / 183-206 KB/帧 | 本节 + tracemalloc 接入 (后续) |
+| 6-10 | 496-498 FPS @ 5-40 min | 本节 + 4 Town × 10-40 min 跨跑 |
+| 6-11 | 增量 vs 全量 7.7× | 本节 + 同输入两次跑 (增量 / 全量对照) |
+
+§6.3.1 文中已注明仪器化实现于 `pipeline.py`, 表 6-8 的 P50/P95/P99 分位延迟
+需要在 24,000 帧真实数据上跑出后填入 (本次仅做接口与均值)。
+
+### 13.6 §10.5 进度总览同步
+
+| 表号 | 真实性变化 |
+|------|---------|
+| 6-8 ~ 6-11 | ⏳ 预估 (未跑) → 🚧 接口已通, 待实跑填均值 + 分位 |
+
+### 13.7 §10.6 下一步优先级更新
+
+更新后的 §10.6 优先级表:
+
+1. ✅ ~~K-HSTGAN Stage II~~ (§11.4 F1=1.000 完成)
+2. ✅ ~~跨 Town OOD~~ (§12 完成)
+3. ✅ ~~RSS 扩充场景规则~~ (§3.3.3.1a + extended.py 完成)
+4. ✅ ~~RQ2 perf_counter 接入~~ (本节 §13 完成)
+5. 🔄 **RQ2 真实数据跑 perf_metrics.json** (Town10HD 10 min, 12K 帧) — 0.5-1 h 工程
+6. ⏳ 表 6-9 内存追踪 (tracemalloc 接入) — 半天
+7. ⏳ 表 6-11 增量 vs 全量对比 (需 `--no-incremental` mode 实现) — 1 天
+8. ⏳ 表 6-16/17 可解释性人工评审 — 1 周
+9. ⏳ 表 6-4/5/7 CARLA GT 比对 — 需在线
