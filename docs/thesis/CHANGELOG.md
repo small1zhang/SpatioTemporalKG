@@ -1,7 +1,26 @@
 # 论文修改记录（CHANGELOG）
 
-> 本文件记录 `docs/thesis/` 下所有章节的创建、重写、修复与格式调整，用于版本管理与回溯。
+> 本文件记录 `docs/thesis/` 与 `stk/` 的推送记录, 用于版本管理与回溯.
+> 前缀 `## 2026-07-30 push` 标记当日推送批次.
+
+| 2026-07-30 | 提交 | 说明 |
+|------|------|------|
+| `ce481fa` | `feat(extraction): CARLA GT 真值标定器` | `scripts/pipeline/carla_gt_extractor.py` 413 行, A) 采集(2400f/72K rec) B) 规则推理(R2/R4/R7/R18/RSS_R13a) |
+| `82e1bd9` | `feat(rules): 落地 4 项 RSS 扩充场景规则` | `stk/rules/rss/extended.py` + `generator.py` + 8 项 smoke test, 475 pytest PASS |
+
+推送目标: `git@github.com:small1zhang/SpatioTemporalKG.git` `feat/rss-viz-panel-plus-pipeline-fix`
+
+---
+
+> 本文件仅记录 `docs/thesis/` 下所有章节的创建、重写、修复与格式调整.
 > 格式：`YYYY-MM-DD | 文件 | 操作 | 说明`
+
+| 2026-07-30 | 提交 | 说明 |
+|------|------|------|
+| `82e1bd9` | `feat(rules): 落地 4 项 RSS 扩充场景规则` | `stk/rules/rss/extended.py` (新增, 397行) + `generator.py` (修改, +128) + `tests/smoke/test_extended_rss.py` (新增, 214行) |
+| | | `extended.py`: 4 条扩充规则纯函数: check_cutin_violation / check_cutout_violation / check_no_proper_response_enhanced / check_construction_zone_adaptive; 规则码常量; CONSTRUCTION_ZONE_PARAMS 参数集 |
+| | | `generator.py`: RuleEnforcer 增加 enable_extended_rss 开关 + 跨帧 _speed_history/_lane_history/_cutout_buffer + _rss_check_one 末尾扩充规则钩子 + _update_state/reset/stats 同步 |
+| **推送记录**: feat/rss-viz-panel-plus-pipeline-fix 82e1bd9 + ce481fa (2 commits) → origin
 
 ---
 
