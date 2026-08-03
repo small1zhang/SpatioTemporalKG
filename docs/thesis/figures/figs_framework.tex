@@ -1,0 +1,544 @@
+% =============================================================================
+%  大论文四大框架图 — 高级科技蓝渐变风格
+%  编译:  pdflatex -shell-escape figs_framework.tex
+%         (或 xelatex / lualatex 均可)
+%  依赖:  tikz, pgfplots (可选), tikz-cd, backgrounds, 
+%         shapes.geometric, fadings, shadings
+%  作者:  自动生成 — 对应 §3 / §4 / §5 / §6
+% =============================================================================
+\documentclass[10pt,border=12pt,multi=true]{standalone}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{tikz-cd}
+\usetikzlibrary{
+  positioning, arrows.meta, calc, fit, shapes.geometric,
+  backgrounds, shadings, fadings, decorations.pathmorphing,
+  decorations.markings, patterns, shadows.blur, shapes.misc
+}
+
+% -----------------------------------------------------------------------------
+%  全局色系 — 深空蓝渐变 + 暖橙强调色（光泽感来自 shading + drop shadow）
+% -----------------------------------------------------------------------------
+\definecolor{deepNavy}{HTML}{0B1F3A}      % 深海军蓝（背景强调）
+\definecolor{midBlue}{HTML}{1B4F8C}       % 中蓝（主框边）
+\definecolor{azure}{HTML}{2E86DE}         % 天蓝（主填充）
+\definecolor{sky}{HTML}{74B9FF}           % 亮天蓝（高光）
+\definecolor{cyan30}{HTML}{A8D8EA}        % 青雾（次框）
+\definecolor{iceWhite}{HTML}{F4F8FB}      % 冰白浅底
+\definecolor{midnight}{HTML}{1A1B3A}      % 午夜（反差文）
+\definecolor{ember}{HTML}{FF7A45}         % 暖橙强调
+\definecolor{emberSoft}{HTML}{FFB088}      % 暖橙浅
+\definecolor{violet}{HTML}{5A4FCF}       % 紫罗兰强调
+\definecolor{moss}{HTML}{3FA17A}          % 苔绿（决策路径）
+
+% 阴影叠加（光泽感来源）
+\pgfdeclarelayer{bg}
+\pgfdeclarelayer{shadow}
+\pgfdeclarelayer{fg}
+\pgfsetlayers{shadow < bg < fg}
+
+% -----------------------------------------------------------------------------
+%  可重用样式
+% -----------------------------------------------------------------------------
+% 主框：天蓝渐变 + 暗影光环
+\tikzset{
+  glassBlue/.style={
+    rectangle, rounded corners=4pt, draw=midBlue, line width=0.6pt,
+    fill=sky, fill opacity=0.85,
+    blur shadow={shadow blur steps=8, shadow blur radius=2.2pt,
+                 shadow yshift=-1.5pt, shadow xshift=0.6pt,
+                 shadow opacity=42},
+    text=midnight, align=center, font=\bfseries\small,
+    inner sep=5pt, minimum width=3.0cm, minimum height=0.7cm
+  },
+% 模块级框：稍深
+  coreBlue/.style={
+    rectangle, rounded corners=5pt, draw=deepNavy, line width=0.9pt,
+    fill={azure}, fill opacity=0.92,
+    blur shadow={shadow blur steps=10, shadow blur radius=3pt,
+                 shadow yshift=-2pt, shadow opacity=55},
+    text=iceWhite, align=center, font=\bfseries\small,
+    inner sep=6pt, minimum width=3.2cm, minimum height=0.85cm
+  },
+% 章节 box（最大颗粒度）
+  chapterBox/.style={
+    rectangle, rounded corners=8pt, draw=deepNavy, line width=1.2pt,
+    fill=deepNavy, fill opacity=0.97,
+    blur shadow={shadow blur steps=12, shadow blur radius=5pt,
+                 shadow yshift=-3pt, shadow opacity=70},
+    text=iceWhite, align=center, font=\bfseries\normalsize,
+    inner sep=8pt, minimum width=4.5cm
+  },
+% 子模块浅框
+  subBlue/.style={
+    rectangle, rounded corners=3.5pt, draw=azure, line width=0.5pt,
+    fill=cyan30, fill opacity=0.62,
+    text=deepNavy, align=center, font=\footnotesize,
+    inner sep=4pt, minimum width=2.4cm, minimum height=0.6cm
+  },
+% 数据/输入框（橙色 = 强调）
+  emberBox/.style={
+    rectangle, rounded corners=4pt, draw=ember, line width=0.7pt,
+    fill=emberSoft, fill opacity=0.85,
+    blur shadow={shadow blur steps=8, shadow blur radius=2pt,
+                 shadow yshift=-1.5pt, shadow opacity=45},
+    text=midnight, align=center, font=\bfseries\small,
+    inner sep=5pt, minimum width=2.6cm
+  },
+% 决策 / 算法 接口
+  violetBox/.style={
+    rectangle, rounded corners=4pt, draw=violet, line width=0.7pt,
+    fill=violet!70, fill opacity=0.7,
+    text=iceWhite, align=center, font=\bfseries\small,
+    inner sep=5pt, minimum width=2.8cm
+  },
+% 主流连接
+  flowArrow/.style={
+    -{Stealth[length=2.5mm, width=1.8mm]}, line width=1.0pt,
+    draw=midBlue, line cap=round, shorten >=1.2pt, shorten <=1.2pt
+  },
+% 反馈回路（紫色虚线）
+  feedbackArrow/.style={
+    -{Stealth[length=2.2mm, width=1.5mm]}, line width=0.9pt,
+    draw=violet, dashed, dash pattern=on 3pt off 2pt,
+    line cap=round, shorten >=1.2pt
+  },
+% 决策路径（暖橙粗箭头）
+  decideArrow/.style={
+    -{Stealth[length=2.8mm, width=2.0mm]}, line width=1.2pt,
+    draw=ember, line cap=round, shorten >=1.2pt
+  },
+% 关键标签
+  tagLabel/.style={
+    fill=iceWhite, draw=midBlue, line width=0.4pt, rounded corners=2pt,
+    font=\scriptsize\itshape, text=deepNavy, inner sep=2.5pt,
+    fill opacity=0.92
+  },
+% 章节大标题
+  sectionLabel/.style={
+    rectangle, fill=deepNavy, fill opacity=0.95,
+    text=iceWhite, align=center, font=\bfseries\large,
+    inner sep=6pt, minimum width=12cm
+  }
+}
+
+\begin{document}
+
+% =============================================================================
+% 图 1 — 创新点①：STKG 四层本体构建框架（§3）
+% =============================================================================
+\begin{tikzpicture}[font=\small, x=1cm, y=1cm]
+
+% 顶部章节标题
+\node[sectionLabel] (title) at (0,5.2)
+  { {\large \textbf{创新点 \textcircled{1}}} \ STKG 四层本体构建框架 };
+
+%---- 输入（左）------
+\node[emberBox, anchor=north] (carla) at (-7, 3.4)
+  {CARLA 0.9.16 \\ \footnotesize 5 地图 · 20 min · 24K 帧};
+\node[emberBox, anchor=north] (frame) at (-7, 1.7)
+  {FrameData \\ \footnotesize actor / TL / env};
+\node[emberBox, anchor=north] (delta) at (-7, 0)
+  {DeltaGraph $\Delta g_t$ \\ \footnotesize 实体/属性/关系/规则};
+
+%---- 四层本体（右）------
+\node[chapterBox, anchor=north] (chap) at (1.5, 3.4)
+  {四层本体 $\mathcal{O}\!=\!(E, A, R, T, P)$};
+\node[coreBlue, right=11mm of chap.east, xshift=1.5cm, anchor=west] (dynamic)
+  {\textbf{横向动态} \\ \footnotesize 版本化·窗口聚合};
+
+% 四层叠层
+\node[glassBlue, below=4mm of chap.south west, anchor=north west] (L1)
+  {\textbf{场景层} \\ 6 类节点 · 15 种空间关系};
+\node[glassBlue, below=4mm of L1.south west, anchor=north west] (L2)
+  {\textbf{行为层} \\ 11 检测器 · 13 行为关系};
+\node[glassBlue, below=4mm of L2.south west, anchor=north west] (L3)
+  {\textbf{规则层} \\ RSS + 14 交规 + 4 扩充};
+\node[glassBlue, below=4mm of L3.south west, anchor=north west] (L4)
+  {\textbf{动态层} \\ 增量引擎 · 版本化};
+
+% 跨层桥接（紫色竖向）
+\node[violetBox, right=5mm of L1.east] (mb1) {manifestsAs};
+\node[violetBox, right=5mm of L2.east] (mb2) {violates};
+\node[violetBox, right=5mm of L3.east] (mb3) {definedBy};
+\node[violetBox, right=5mm of L4.east] (mb4) {supportedByEvidence};
+
+%---- 输出（下）------
+\node[emberBox, below=8mm of L4.south, anchor=north, xshift=-1.2cm] (svg)
+  {Neo4j \\ \footnotesize 持久化 · 批量 MERGE};
+\node[emberBox, right=6mm of svg.east, anchor=west] (pyg)
+  {PyG Data \\ \footnotesize 喂入 K-HSTGAN};
+
+%---- 连接 ------
+\draw[flowArrow] (carla) -- ++(1.5,0) |- (frame.west);
+\draw[flowArrow] (frame) -- ++(1.0,0) |- (chap.west);
+\draw[flowArrow] (delta) -| (L4.west);
+
+\draw[flowArrow] (L1.east) -- (mb1.west);
+\draw[flowArrow] (L2.east) -- (mb2.west);
+\draw[flowArrow] (L3.east) -- (mb3.west);
+\draw[flowArrow] (L4.east) -- (mb4.west);
+
+\draw[feedbackArrow] (mb1.east) -- ++(0.5,0) |- (L3.east);
+\draw[feedbackArrow] (mb2.east) -- ++(0.7,0) |- (L3.east);
+\draw[feedbackArrow] (mb3.east) -- ++(0.9,0) |- (L1.east);
+
+\draw[flowArrow] (L4.south) -- (svg.north);
+\draw[flowArrow] (svg.east) -- (pyg.west);
+
+% 底部铭牌
+\node[tagLabel, anchor=north] at (0,-3.6)
+  {基于 7 条核心公理 · 节点生命周期 · Ego-Centric 全栈压缩};
+
+\end{tikzpicture}
+
+
+% =============================================================================
+% 图 2 — 创新点②：K-HSTGAN 三层时空图注意力网络架构（§4）
+% =============================================================================
+\begin{tikzpicture}[font=\small, x=1cm, y=1cm]
+
+% 顶部章节标题
+\node[sectionLabel] (title) at (0, 6.4)
+  { {\large \textbf{创新点 \textcircled{2}}} \ K-HSTGAN 知识引导层次化时空图注意力网络 };
+
+%---- 输入层（最左）------
+\node[emberBox, anchor=north] (Xt) at (-7.5, 4.6)
+  {$X_t \in \mathbb{R}^{N \times 18}$ \\ \footnotesize 节点物理特征};
+\node[emberBox, anchor=north, below=3.5mm of Xt.south west,
+       anchor=north west] (At)
+  {$A_t^{(15)} \in \mathbb{R}^{N \times N \times 16}$ \\ \footnotesize 场景关系};
+\node[emberBox, anchor=north, below=3.5mm of At.south west,
+       anchor=north west] (Bt)
+  {$B_t^{(13)} \in \mathbb{R}^{N \times N \times 14}$ \\ \footnotesize 行为关系};
+\node[emberBox, anchor=north, below=3.5mm of Bt.south west,
+       anchor=north west] (delta)
+  {$\Delta g_t$ \\ \footnotesize 差分图};
+\node[emberBox, anchor=north, below=3.5mm of delta.south west,
+       anchor=north west] (rule)
+  {$\kappa_{\text{rss}}\!, \kappa_{\text{rule}}$ \\ \footnotesize 知识先验};
+
+%---- Stage 1: 空间编码层 ------
+\node[chapterBox, anchor=north] (header) at (0, 4.6)
+  { \textbf{K-HSTGAN} };
+\node[coreBlue, anchor=north west] (S1) at (-3.0, 3.6)
+  {\textbf{空间编码层} \\ RGAT (§4.2)};
+\node[subBlue, below=2mm of S1.south west, anchor=north west] (S1a)
+  {关系感知注意力 $\alpha_{ij}^{(l)}$};
+\node[subBlue, below=1mm of S1a.south west, anchor=north west] (S1b)
+  {15 种关系先验 $\gamma_k$};
+\node[subBlue, below=1mm of S1b.south west, anchor=north west] (S1c)
+  {多头聚合 $H\!=\!4$};
+
+%---- Stage 2: 时序编码层 ------
+\node[coreBlue, anchor=north west] (S2) at (1.2, 3.6)
+  {\textbf{时序编码层} \\ DH-LSTM+Attn (§4.3)};
+\node[subBlue, below=2mm of S2.south west, anchor=north west] (S2a)
+  {帧级 LSTM};
+\node[subBlue, below=1mm of S2a.south west, anchor=north west] (S2b)
+  {差分门控 $g_t\!=\!\sigma(\cdot)$};
+\node[subBlue, below=1mm of S2b.south west, anchor=north west] (S2c)
+  {Scene Transformer 自注意力};
+
+%---- Stage 3: 知识注入层 ------
+\node[coreBlue, anchor=north west] (S3) at (5.4, 3.6)
+  {\textbf{知识注入层} \\ (§4.4)};
+\node[subBlue, below=2mm of S3.south west, anchor=north west] (S3a)
+  {RSS 公式编码 (5 维残差)};
+\node[subBlue, below=1mm of S3a.south west, anchor=north west] (S3b)
+  {交规 Embedding (14 维强度)};
+\node[subBlue, below=1mm of S3b.south west, anchor=north west] (S3c)
+  {弱监督标签 $\hat{y}_{\text{rule}}$};
+
+%---- 融合头与预测（底部） ------
+\node[glassBlue, anchor=north west] (F1) at (-3.0, -0.4)
+  {\textbf{多模态多任务融合头} \\ §4.5};
+
+\node[violetBox, anchor=north] (head1) at (-1.5, -1.8)
+  {$p_{\text{scene}}\in\mathbb{R}^{3}$ \\ 场景异常};
+\node[violetBox, anchor=north] (head2) at (0, -1.8)
+  {$p_{\text{behavior}}\in\mathbb{R}^{7}$ \\ 行为异常};
+\node[violetBox, anchor=north] (head3) at (1.5, -1.8)
+  {$p_{\text{rule}}\in\mathbb{R}^{24}$ \\ 规则异常};
+
+\node[emberBox, anchor=north] (anom) at (0, -3.0)
+  {$p_{\text{anomaly}} \in [0,1]$ \\ \textbf{异常分数}};
+
+%---- 连接 ------
+\draw[flowArrow] (Xt.east) -- ++(0.4,0) |- ([yshift=4pt]S1.west);
+\draw[flowArrow] (At.east) -- ++(0.2,0) |- (S1.west);
+\draw[flowArrow] (Bt.east) -- ++(0.0,0) |- ([yshift=-4pt]S1.west);
+\draw[flowArrow] (delta.east) -- ++(0.5,0) |- (S2b.west);
+\draw[flowArrow] (rule.east) -- ++(0.7,0) |- (S3.west);
+
+\draw[flowArrow] (S1.east) -- (S2.west);
+\draw[flowArrow] (S2.east) -- (S3.west);
+\draw[flowArrow] (S3.south) |- (F1.east);
+\draw[flowArrow] (S2.south) |- (F1.west);
+
+\draw[flowArrow] (F1.south) -- ++(0,-0.3) -| (head1.north);
+\draw[flowArrow] (F1.south) -- (head2.north);
+\draw[flowArrow] (F1.south) -- ++(0,-0.1) -| (head3.north);
+
+\draw[decideArrow] (head1.south) -- (anom.north west);
+\draw[decideArrow] (head2.south) -- (anom.north);
+\draw[decideArrow] (head3.south) -- (anom.north east);
+
+% 注意力回传
+\node[tagLabel, anchor=south west] at (-7.5, -2.4)
+  {注意力权重输出 $\to$ §5 KS-NBCF 冲突消解};
+\draw[feedbackArrow] (anom.west) -| ++(-7,0) |- (head1.west);
+
+% 底部铭牌
+\node[tagLabel, anchor=north] at (0,-3.6)
+  {Focal Loss + 三阶段调度 + EMA · 41K 帧 F1\,=\,1.000};
+
+\end{tikzpicture}
+
+
+% =============================================================================
+% 图 3 — 创新点③：KS-NBCF 符号-神经双向闭环融合框架（§5）
+% =============================================================================
+\begin{tikzpicture}[font=\small, x=1cm, y=1cm]
+
+\node[sectionLabel] (title) at (0, 5.4)
+  { {\large \textbf{创新点 \textcircled{3}}} \ KS-NBCF 符号-神经双向闭环融合框架
+    \ $\mathcal{F}\!=\!(\phi_{\text{feat}}, \phi_{\text{loop}}, \phi_{\text{fuse}})$};
+
+%---- 上路：规则引擎 ------
+\node[emberBox, anchor=north] (reng) at (-6, 3.9)
+  {\textbf{规则引擎} \\ RuleEnforcer (§3)};
+\node[subBlue, anchor=north] (rss) at (-7.5, 2.5)
+  {RSS 算子};
+\node[subBlue, anchor=north] (r14) at (-6, 2.5)
+  {14 交规};
+\node[subBlue, anchor=north] (rssExt) at (-4.5, 2.5)
+  {4 扩充规则 \\ CUTIN/CZ ADAPT};
+
+%---- 下路：GNN ------
+\node[emberBox, anchor=north] (gnn) at (6, 3.9)
+  {\textbf{K-HSTGAN} \\ (§4)};
+\node[subBlue, anchor=north] (emb) at (4.5, 2.5)
+  {空间编码 RGAT};
+\node[subBlue, anchor=north] (lstm) at (6, 2.5)
+  {差分门控 LSTM};
+\node[subBlue, anchor=north] (ki) at (7.5, 2.5)
+  {知识注入};
+
+%---- 中路：三子模块 ------
+\node[coreBlue, anchor=north] (phiFeat) at (-2.0, 0.7)
+  {$\phi_{\text{feat}}$ \\ \footnotesize 特征层注入};
+\node[coreBlue, anchor=north] (phiLoop) at (0, 0.7)
+  {$\phi_{\text{loop}}$ \\ \footnotesize 双向闭环训练};
+\node[coreBlue, anchor=north] (phiFuse) at (2.0, 0.7)
+  {$\phi_{\text{fuse}}$ \\ \footnotesize D-S 证据融合};
+
+%---- 子模块细节 ------
+\node[subBlue, anchor=north] (feat1) at (-2.5, -0.8)
+  {$h_v^{(0)}\!=\![x_v \,\|\, \kappa_{\text{rss}}\,\|\, \kappa_{\text{rule}}]$};
+\node[subBlue, anchor=north] (feat2) at (-0.5, -0.8)
+  {37 维初始特征};
+
+\node[subBlue, anchor=north] (loop1) at (0, -0.8)
+  {Stage I 弱监督};
+\node[subBlue, anchor=north] (loop2) at (1.5, -0.8)
+  {Stage II 反馈};
+\node[subBlue, anchor=north] (loop3) at (-1.5, -0.8)
+  {Stage III 模板};
+
+\node[subBlue, anchor=north] (fuse1) at (1.5, -0.8)
+  {$m_{\text{rule}}, m_{\text{GNN}}$};
+\node[subBlue, anchor=north] (fuse2) at (3.0, -0.8)
+  {Dempster 组合};
+
+%---- 冲突消解分支 ------
+\node[violetBox, anchor=north] (conflict) at (4.0, -2.5)
+  {冲突系数 $K > \tau$?};
+\node[violetBox, anchor=north] (resolve) at (1.5, -3.5)
+  {\textbf{KG 证据链回溯} \\ overlap 仲裁};
+
+%---- 最终判定 ------
+\node[chapterBox, anchor=north, fill=midnight] (final) at (-1.0, -5.0)
+  {$\hat{y}, m_{\text{fused}}, \mathrm{ExpPath}$};
+
+%---- 连接：上路 ------
+\draw[flowArrow] (reng.south) -- (rss.north);
+\draw[flowArrow] (reng.south) -- (r14.north);
+\draw[flowArrow] (reng.south) -- (rssExt.north);
+
+% 下路
+\draw[flowArrow] (gnn.south) -- (emb.north);
+\draw[flowArrow] (gnn.south) -- (lstm.north);
+\draw[flowArrow] (gnn.south) -- (ki.north);
+
+% 规则 → φ_feat
+\draw[flowArrow] (rss.south) -| (feat1.west);
+\draw[flowArrow] (r14.south) -- (feat2.west);
+\draw[flowArrow] (rssExt.south) -- ++(-1,-0.4) -| (feat1.west);
+
+% GNN → φ_feat
+\draw[flowArrow] (emb.south) -- ++(0,-0.5) -| (feat2.east);
+\draw[flowArrow] (ki.south) -- (feat2.east);
+
+% φ_feat → φ_loop → φ_fuse
+\draw[flowArrow] (phiFeat.east) -- (phiLoop.west);
+\draw[flowArrow] (phiLoop.east) -- (phiFuse.west);
+
+% 反馈回路：φ_loop ↔ 规则引擎
+\draw[feedbackArrow] (phiLoop.north) -- ++(0, 1.4) -| (reng.south);
+\node[tagLabel] at ($(reng.south)+(0.5, 0.1)$) {置信度调整};
+
+% 规则/GNN mass → φ_fuse
+\draw[flowArrow] (reng.south) -- ++(0,-2.4) -| (fuse1.west);
+\draw[flowArrow] (gnn.south) -- ++(0,-2.4) -| (fuse2.east);
+
+% φ_fuse → 冲突判断
+\draw[flowArrow] (phiFuse.south) -- (fuse1.north);
+\draw[flowArrow] (phiFuse.south) -- (fuse2.north);
+\draw[flowArrow] (phiFuse.south) -- ++(0,-1) -| (conflict.west);
+
+% 冲突消解
+\draw[decideArrow] (conflict.south) -- (resolve.north);
+
+% 输出
+\draw[flowArrow] (fuse1.south) -- ++(-1.5,-0.6) -| (final.north);
+\draw[flowArrow] (fuse2.south) -- ++(0.5,-0.8) -| (final.north);
+\draw[decideArrow] (resolve.south) -- (final.north east);
+
+% 底部铭牌
+\node[tagLabel, anchor=north] at (0,-6.0)
+  {三阶段双向闭环 \ $\to$ \ D-S 证据融合 \ $\to$ \ KG 证据链路径回溯仲裁};
+
+\end{tikzpicture}
+
+
+% =============================================================================
+% 图 4 — 实验与结果验证框架（§6 RQ1–RQ5）
+% =============================================================================
+\begin{tikzpicture}[font=\small, x=1cm, y=1cm]
+
+\node[sectionLabel] (title) at (0, 5.4)
+  { {\large \textbf{第 6 章}} \ 实验与结果分析 — RQ1\,$\to$\,RQ5 验证链 };
+
+%---- 数据基础（顶部） ------
+\node[emberBox, anchor=north] (data) at (-6, 4.0)
+  {\textbf{数据基础设施} \\ 41,150 帧 · 5 地图 · 20min};
+\node[subBlue, anchor=north] (frameLab) at (-7.5, 2.5)
+  {frame\_labels.csv (41K)};
+\node[subBlue, anchor=north] (anomaly) at (-6, 2.5)
+  {anomaly\_log.json (4,926)};
+\node[subBlue, anchor=north] (carlaGT) at (-4.5, 2.5)
+  {CARLA GT 提取器};
+
+%---- 5 个 RQ（主线） ------
+\node[coreBlue, anchor=north] (rq1) at (-4.2, 0.8)
+  {\textbf{RQ1} \\ 图谱构建质量};
+\node[coreBlue, anchor=north] (rq2) at (-2.1, 0.8)
+  {\textbf{RQ2} \\ 流式性能};
+\node[coreBlue, anchor=north] (rq3) at (0, 0.8)
+  {\textbf{RQ3} \\ 异常检测};
+\node[coreBlue, anchor=north] (rq4) at (2.1, 0.8)
+  {\textbf{RQ4} \\ 消融实验};
+\node[coreBlue, anchor=north] (rq5) at (4.2, 0.8)
+  {\textbf{RQ5} \\ 融合+消解};
+
+%---- 各 RQ 的子实验 ------
+\node[subBlue, anchor=north] (rq1a) at (-5.0, -0.5)
+  {场景关系 F1 \\ 表 6-4};
+\node[subBlue, anchor=north] (rq1b) at (-3.7, -0.5)
+  {行为检测 F1 \\ 表 6-5};
+\node[subBlue, anchor=north] (rq1c) at (-2.5, -0.5)
+  {规则 DR/FAR \\ 表 6-6};
+
+\node[subBlue, anchor=north] (rq2a) at (-1.7, -0.5)
+  {吞吐/延迟 \\ 表 6-8};
+\node[subBlue, anchor=north] (rq2b) at (-0.5, -0.5)
+  {内存/长时 \\ 表 6-9/10};
+\node[subBlue, anchor=north] (rq2c) at (0.7, -0.5)
+  {增量 vs 全量 \\ 表 6-11};
+
+\node[subBlue, anchor=north] (rq3a) at (-0.6, -2.0)
+  {K-HSTGAN 主结果 ($\boldsymbol{F1=1.0}$) \\ 表 6-13};
+\node[subBlue, anchor=north] (rq3b) at (0.9, -2.0)
+  {PR 曲线 / 38 阈值 \\ 表 6-13 续};
+\node[subBlue, anchor=north] (rq3c) at (2.4, -2.0)
+  {跨 Town OOD \\ 表 6-18};
+
+\node[subBlue, anchor=north] (rq4a) at (1.2, -0.5)
+  {架构消融 \\ 表 6-13 续};
+\node[subBlue, anchor=north] (rq4b) at (2.5, -0.5)
+  {融合消融 \\ 表 6-15};
+\node[subBlue, anchor=north] (rq4c) at (3.8, -0.5)
+  {系统级 \\ 表 6-10 续};
+
+\node[subBlue, anchor=north] (rq5a) at (3.3, -2.0)
+  {冲突消解矩阵 \\ 表 6-?};
+\node[subBlue, anchor=north] (rq5b) at (4.7, -2.0)
+  {Case Study \\ 证据链可视化};
+
+%---- 真实化状态（底部色块） ------
+\node[emberBox, anchor=north, fill=moss!50, draw=moss] (real1) at (-2.5, -3.4)
+  {\textbf{已真实化} \\ 表 6-13 / 6-18 / 6-3};
+\node[emberBox, anchor=north, fill=emberSoft, draw=ember] (est) at (1.5, -3.4)
+  {\textbf{预估待跑} \\ 表 6-4/5/6 + 6-8\,$\to$\,11};
+\node[emberBox, anchor=north, fill=violet!40, draw=violet] (manual) at (5.2, -3.4)
+  {\textbf{需人工评审} \\ 表 6-16/17};
+
+%---- 输出（底部） ------
+\node[chapterBox, anchor=north, fill=midnight] (conclusion) at (0, -5.0)
+  {$\to$ \ 第 7 章 \ 总结与展望};
+
+%---- 连接 ------
+\draw[flowArrow] (data.south) -- (frameLab.north);
+\draw[flowArrow] (data.south) -- (anomaly.north);
+\draw[flowArrow] (data.south) -- (carlaGT.north);
+
+\draw[flowArrow] (frameLab.south) -- ++(0,-0.5) -| (rq1.north);
+\draw[flowArrow] (anomaly.south) -- ++(0,-0.5) -| (rq1.east);
+\draw[flowArrow] (carlaGT.south) -- ++(0,-0.5) -| (rq1.north east);
+
+\draw[flowArrow] (rq1.east) -- (rq2.west);
+\draw[flowArrow] (rq2.east) -- (rq3.west);
+\draw[flowArrow] (rq3.east) -- (rq4.west);
+\draw[flowArrow] (rq4.east) -- (rq5.west);
+
+\draw[flowArrow] (rq1.south) -- (rq1a.north);
+\draw[flowArrow] (rq1.south) -- (rq1b.north);
+\draw[flowArrow] (rq1.south) -- (rq1c.north);
+
+\draw[flowArrow] (rq2.south) -- (rq2a.north);
+\draw[flowArrow] (rq2.south) -- (rq2b.north);
+\draw[flowArrow] (rq2.south) -- (rq2c.north);
+
+\draw[flowArrow] (rq3.south) -- ++(0,-0.3) -| (rq3a.north);
+\draw[flowArrow] (rq3.south) -- ++(0,-0.3) -| (rq3b.north);
+\draw[flowArrow] (rq3.south) -- ++(0,-0.3) -| (rq3c.north);
+
+\draw[flowArrow] (rq4.south) -- (rq4a.north);
+\draw[flowArrow] (rq4.south) -- (rq4b.north);
+\draw[flowArrow] (rq4.south) -- (rq4c.north);
+
+\draw[flowArrow] (rq5.south) -- ++(0,-0.3) -| (rq5a.north);
+\draw[flowArrow] (rq5.south) -- ++(0,-0.3) -| (rq5b.north);
+
+% 子实验 → 状态色块
+\draw[feedbackArrow] (rq1c.south) -- ++(0,-1) -| (est.north);
+\draw[feedbackArrow] (rq2a.south) -- ++(0,-1) -| (est.north);
+\draw[decideArrow] (rq3a.south) -- (real1.east);
+\draw[decideArrow] (rq3c.south) -- (real1.east);
+\draw[feedbackArrow] (rq5b.south) -- ++(0,0) -| (manual.north);
+
+% 状态 → 结论
+\draw[flowArrow] (real1.south) -- (conclusion.north west);
+\draw[flowArrow] (est.south) -- (conclusion.north);
+\draw[flowArrow] (manual.south) -- (conclusion.north east);
+
+% 底部铭牌
+\node[tagLabel, anchor=north] at (0,-6.0)
+  {硬件 RTX 3090 · 真实数据采集 = \textbf{3 大创新点闭环验证} \ $\to$ \ 投稿 Engineering Applications of AI};
+
+\end{tikzpicture}
+
+\end{document}
