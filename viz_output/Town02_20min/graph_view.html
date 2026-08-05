@@ -87,6 +87,10 @@
     <h4>📋 EGO 自车信息</h4>
     <div id="ego-info" style="color:var(--text2)">--</div>
 
+    <!-- 1b. Frame Stats (节点 / 边 / 类型分布) -->
+    <h4>📊 当前帧统计</h4>
+    <div id="stats-panel" style="color:var(--text2);font-size:11px">--</div>
+
     <!-- 2. Anomaly Events -->
     <h4>⚠️ 异常事件 <span class="badge" id="anom-this-frame-badge"></span></h4>
     <div id="anomaly-panel" style="color:var(--text2);font-size:11px">加载中...</div>
@@ -800,6 +804,7 @@ function updateEgoSidebar(ego, edges) {
 
 function updateAnomalyPanel() {
   const panel = document.getElementById('anomaly-panel');
+  if (!panel) return;
   const badge = document.getElementById('anom-this-frame-badge');
   document.getElementById('anom-this-frame').textContent = '';
   if (!KG.anomalyLog) {
@@ -829,6 +834,7 @@ function updateAnomalyPanel() {
 
 function updateStatsPanel(visNodes, visEdges) {
   const panel = document.getElementById('stats-panel');
+  if (!panel) return;
   const types = [...new Set(visNodes.map(n => n.type))];
   const maxC = Math.max(...types.map(t => visNodes.filter(n => n.type === t).length), 1);
   const nodeHtml = types.map(t => {
@@ -899,6 +905,7 @@ function updateMinimap(allNodes, edges, egoId) {
 
 function updateEnvPanel(nodes) {
   const panel = document.getElementById('env-panel');
+  if (!panel) return;
   const env = nodes.find(n => n.type === 'EnvironmentSnapshot');
   if (!env || !env.attrs) {
     panel.innerHTML = '<span style="color:var(--text2)">无环境数据</span>';
@@ -920,6 +927,7 @@ function updateEnvPanel(nodes) {
 /* ── Rule panel ─────────────────────────────────────────────────── */
 function updateRulePanel(visNodes) {
   const panel = document.getElementById('rule-panel');
+  if (!panel) return;
   const svs = visNodes.filter(n => n.type === 'SafetyViolation');
   if (svs.length === 0) { panel.innerHTML = '<span style="color:var(--text2)">无规则数据</span>'; return; }
   const rules = {};
@@ -943,6 +951,7 @@ function updateRulePanel(visNodes) {
 /* ── Stats panels (reusing viz_stats-based panels) ─────────────── */
 function updateTrendPanel() {
   const panel = document.getElementById('trend-panel');
+  if (!panel) return;
   if (!KG.vizStats?.frame_trend) { panel.innerHTML = '<span style="color:var(--text2)">无趋势数据</span>'; return; }
   const ft = KG.vizStats.frame_trend;
   const maxN = Math.max(...ft.map(f => f.nodes), 1);
@@ -967,6 +976,7 @@ function updateTrendPanel() {
 
 function updateAnomTimelinePanel() {
   const panel = document.getElementById('anom-timeline-panel');
+  if (!panel) return;
   if (!KG.vizStats?.anom_bins) { panel.innerHTML = '<span style="color:var(--text2)">无异常数据</span>'; return; }
   const bins = KG.vizStats.anom_bins;
   const allTypes = ['sudd_brk', 'sudd_stp', 'avd_col', 'jun_ny', 'rev_drive', 'ped_crs', 'obs_blk'];
@@ -1006,6 +1016,7 @@ const ANOM_LABELS = { sudd_brk: '🚗 急刹', sudd_stp: '⏹️ 急停', avd_co
 
 function updateIEPanel() {
   const panel = document.getElementById('ie-panel');
+  if (!panel) return;
   if (!KG.vizStats?.ie_dist) { panel.innerHTML = '<span style="color:var(--text2)">无交互数据</span>'; return; }
   const ie = KG.vizStats.ie_dist;
   const total = Object.values(ie).reduce((a, b) => a + b, 0);
@@ -1025,6 +1036,7 @@ function updateIEPanel() {
 
 function updateVehicleLifetimePanel() {
   const panel = document.getElementById('vehicle-lifetime-panel');
+  if (!panel) return;
   if (!KG.vizStats?.vehicle_lifetimes) { panel.innerHTML = '<span style="color:var(--text2)">无车辆数据</span>'; return; }
   const vtls = KG.vizStats.vehicle_lifetimes;
   const maxL = Math.max(...vtls.map(v => v.lifetime), 1);
@@ -1041,6 +1053,7 @@ function updateVehicleLifetimePanel() {
 
 function updateRespPanel() {
   const panel = document.getElementById('resp-panel');
+  if (!panel) return;
   if (!KG.vizStats?.resp_reasons) { panel.innerHTML = '<span style="color:var(--text2)">无责任数据</span>'; return; }
   const reasons = KG.vizStats.resp_reasons;
   const total = Object.values(reasons).reduce((a, b) => a + b, 0);
@@ -1061,6 +1074,7 @@ function updateRespPanel() {
 
 function updateRSSOverviewPanel() {
   const panel = document.getElementById('rss-overview-panel');
+  if (!panel) return;
   if (!KG.vizStats?.rss_dist) { panel.innerHTML = '<span style="color:var(--text2)">无 RSS 数据</span>'; return; }
   const r = KG.vizStats.rss_dist;
   let html = '<div style="display:flex;gap:6px;flex-wrap:wrap;font-size:10px;margin-bottom:6px">';
@@ -1099,6 +1113,7 @@ function updateRSSOverviewPanel() {
 
 function updateRSSTimelinePanel() {
   const panel = document.getElementById('rss-timeline-panel');
+  if (!panel) return;
   if (!KG.vizStats?.rss_dist?.fired_bins) { panel.innerHTML = '<span style="color:var(--text2)">无触发数据</span>'; return; }
   const fb = KG.vizStats.rss_dist.fired_bins;
   const codes = Object.keys(fb);
@@ -1134,6 +1149,7 @@ function updateRSSTimelinePanel() {
 
 function updateRSSRespTopPanel() {
   const panel = document.getElementById('rss-resp-top-panel');
+  if (!panel) return;
   if (!KG.vizStats?.rss_dist?.resp_top) { panel.innerHTML = '<span style="color:var(--text2)">无数据</span>'; return; }
   const top = KG.vizStats.rss_dist.resp_top;
   if (top.length === 0) { panel.innerHTML = '<span style="color:var(--text2)">无数据</span>'; return; }
@@ -1154,6 +1170,7 @@ function updateRSSRespTopPanel() {
 
 function updateRSSFramePanel(g, frame) {
   const panel = document.getElementById('rss-frame-panel');
+  if (!panel) return;
   if (!g?.nodes) { panel.innerHTML = '<span style=\"color:var(--text2)\">无数据</span>'; return; }
   const svs = g.nodes.filter(n => n.type === 'SafetyViolation' && n.first_frame <= frame && n.last_frame >= frame);
   if (svs.length === 0) { panel.innerHTML = '<span style="color:var(--text2)">当前帧无违规</span>'; return; }

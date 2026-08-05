@@ -100,6 +100,8 @@ button.sm{padding:4px 10px;font-size:11px}
 <!-- 知识图谱 -->
 <div id="panel-kg" class="panel">
   <div class="controls">
+    <label>地图 <select id="kg-map" style="min-width:90px"></select></label>
+    <label>场景 <select id="kg-scenario" style="min-width:90px"></select></label>
     <label>分片 <select id="kg-shard-select" onchange="switchShard()"><option value="">加载中...</option></select></label>
     <button class="primary" onclick="loadKG()">🔍 加载图谱</button>
     <button onclick="resetKGView()">↺ 重置视图</button>
