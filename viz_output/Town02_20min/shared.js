@@ -117,6 +117,18 @@ const KG = {
     }
   },
 
+  /** Load all shards currently selected in KG.shardSet */
+  async loadMultiShard() {
+    if (!this.summary) return;
+    const targets = this.shardSet.size > 0
+      ? [...this.shardSet]
+      : this.summary.shards.map(s => s.shard_idx);
+    for (const idx of targets) {
+      await this.loadShard(idx);
+    }
+    this.mergeAllShards();
+  },
+
   /** Merge all loaded shards into allNodes / allEdges */
   mergeAllShards() {
     const nodeMap = new Map();
