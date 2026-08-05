@@ -1366,8 +1366,9 @@ function buildLegend(visNodes, egoId) {
 function drawAnomalyTicks() {
   if (!KG.anomalyLog || !KG.summary) return;
   const wrapper = document.getElementById('slider-wrapper');
-  wrapper.querySelectorAll('.anomaly-tick').forEach(e => e.remove());
-  wrapper2.querySelectorAll('.anomaly-tick').forEach(e => e.remove());
+  if (wrapper) wrapper.querySelectorAll('.anomaly-tick').forEach(e => e.remove());
+  const wrapper2 = document.getElementById('slider-wrapper2');
+  if (wrapper2) wrapper2.querySelectorAll('.anomaly-tick').forEach(e => e.remove());
 }
 
 /* ═══════════════════════════════════════════════════════════════════
