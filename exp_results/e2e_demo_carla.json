@@ -1,0 +1,252 @@
+[
+  {
+    "frame_id": 0,
+    "status": "ok",
+    "n_nodes": 44,
+    "models": {
+      "K-HSTGAN": {
+        "model": "K-HSTGAN",
+        "n_anomaly_nodes": 44,
+        "y_anomaly_mean": 0.5112,
+        "y_anomaly_max": 0.5144
+      },
+      "KS-NBCF": {
+        "model": "KS-NBCF",
+        "n_anomaly_nodes": 42,
+        "y_anomaly_mean": 0.5031,
+        "y_anomaly_max": 0.5125
+      },
+      "RE-GCN": {
+        "model": "RE-GCN",
+        "n_anomaly_nodes": 0,
+        "y_anomaly_mean": 0.4686,
+        "y_anomaly_max": 0.4927
+      },
+      "GDN": {
+        "model": "GDN",
+        "n_anomaly_nodes": 3,
+        "y_anomaly_mean": 0.4862,
+        "y_anomaly_max": 0.512
+      },
+      "GeneralDyG": {
+        "model": "GeneralDyG",
+        "n_anomaly_nodes": 0,
+        "y_anomaly_mean": 0.3462,
+        "y_anomaly_max": 0.3973
+      }
+    },
+    "ks_nbcf_fusion": {
+      "decision": "anomaly",
+      "K": 0.0,
+      "m_fused_anomaly": 0.5112,
+      "is_consistent": true
+    },
+    "ks_nbcf_arbiter": {
+      "resolve_type": "consistent",
+      "y_fused": 0.5112,
+      "overlap": 0.0,
+      "explanation": "K=0.000 Δ-S:anomaly|overlap=0.00|resolve=consistent|evidence_sev=0.00|(214)-[:in_lane α=1.00]->(232)|(228)-[:in_lane α=1"
+    },
+    "processing_time_ms": 14.6
+  },
+  {
+    "frame_id": 1,
+    "status": "ok",
+    "n_nodes": 44,
+    "models": {
+      "K-HSTGAN": {
+        "model": "K-HSTGAN",
+        "n_anomaly_nodes": 44,
+        "y_anomaly_mean": 0.5112,
+        "y_anomaly_max": 0.5144
+      },
+      "KS-NBCF": {
+        "model": "KS-NBCF",
+        "n_anomaly_nodes": 42,
+        "y_anomaly_mean": 0.5028,
+        "y_anomaly_max": 0.5125
+      },
+      "RE-GCN": {
+        "model": "RE-GCN",
+        "n_anomaly_nodes": 0,
+        "y_anomaly_mean": 0.4687,
+        "y_anomaly_max": 0.4944
+      },
+      "GDN": {
+        "model": "GDN",
+        "n_anomaly_nodes": 3,
+        "y_anomaly_mean": 0.4851,
+        "y_anomaly_max": 0.512
+      },
+      "GeneralDyG": {
+        "model": "GeneralDyG",
+        "n_anomaly_nodes": 0,
+        "y_anomaly_mean": 0.3439,
+        "y_anomaly_max": 0.3981
+      }
+    },
+    "ks_nbcf_fusion": {
+      "decision": "anomaly",
+      "K": 0.0,
+      "m_fused_anomaly": 0.5112,
+      "is_consistent": true
+    },
+    "ks_nbcf_arbiter": {
+      "resolve_type": "consistent",
+      "y_fused": 0.5112,
+      "overlap": 0.0,
+      "explanation": "K=0.000 Δ-S:anomaly|overlap=0.00|resolve=consistent|evidence_sev=0.00|(214)-[:in_lane α=1.00]->(232)|(228)-[:in_lane α=1"
+    },
+    "processing_time_ms": 8.6
+  },
+  {
+    "frame_id": 2,
+    "status": "ok",
+    "n_nodes": 44,
+    "models": {
+      "K-HSTGAN": {
+        "model": "K-HSTGAN",
+        "n_anomaly_nodes": 44,
+        "y_anomaly_mean": 0.5112,
+        "y_anomaly_max": 0.5144
+      },
+      "KS-NBCF": {
+        "model": "KS-NBCF",
+        "n_anomaly_nodes": 42,
+        "y_anomaly_mean": 0.5028,
+        "y_anomaly_max": 0.5125
+      },
+      "RE-GCN": {
+        "model": "RE-GCN",
+        "n_anomaly_nodes": 0,
+        "y_anomaly_mean": 0.4686,
+        "y_anomaly_max": 0.4945
+      },
+      "GDN": {
+        "model": "GDN",
+        "n_anomaly_nodes": 3,
+        "y_anomaly_mean": 0.4852,
+        "y_anomaly_max": 0.512
+      },
+      "GeneralDyG": {
+        "model": "GeneralDyG",
+        "n_anomaly_nodes": 0,
+        "y_anomaly_mean": 0.3439,
+        "y_anomaly_max": 0.3981
+      }
+    },
+    "ks_nbcf_fusion": {
+      "decision": "anomaly",
+      "K": 0.0,
+      "m_fused_anomaly": 0.5112,
+      "is_consistent": true
+    },
+    "ks_nbcf_arbiter": {
+      "resolve_type": "consistent",
+      "y_fused": 0.5112,
+      "overlap": 0.0,
+      "explanation": "K=0.000 Δ-S:anomaly|overlap=0.00|resolve=consistent|evidence_sev=0.00|(214)-[:in_lane α=1.00]->(232)|(228)-[:in_lane α=1"
+    },
+    "processing_time_ms": 8.2
+  },
+  {
+    "frame_id": 3,
+    "status": "ok",
+    "n_nodes": 44,
+    "models": {
+      "K-HSTGAN": {
+        "model": "K-HSTGAN",
+        "n_anomaly_nodes": 44,
+        "y_anomaly_mean": 0.5112,
+        "y_anomaly_max": 0.5144
+      },
+      "KS-NBCF": {
+        "model": "KS-NBCF",
+        "n_anomaly_nodes": 42,
+        "y_anomaly_mean": 0.5028,
+        "y_anomaly_max": 0.5125
+      },
+      "RE-GCN": {
+        "model": "RE-GCN",
+        "n_anomaly_nodes": 0,
+        "y_anomaly_mean": 0.4685,
+        "y_anomaly_max": 0.4946
+      },
+      "GDN": {
+        "model": "GDN",
+        "n_anomaly_nodes": 3,
+        "y_anomaly_mean": 0.4852,
+        "y_anomaly_max": 0.512
+      },
+      "GeneralDyG": {
+        "model": "GeneralDyG",
+        "n_anomaly_nodes": 0,
+        "y_anomaly_mean": 0.344,
+        "y_anomaly_max": 0.3982
+      }
+    },
+    "ks_nbcf_fusion": {
+      "decision": "anomaly",
+      "K": 0.0,
+      "m_fused_anomaly": 0.5112,
+      "is_consistent": true
+    },
+    "ks_nbcf_arbiter": {
+      "resolve_type": "consistent",
+      "y_fused": 0.5112,
+      "overlap": 0.0,
+      "explanation": "K=0.000 Δ-S:anomaly|overlap=0.00|resolve=consistent|evidence_sev=0.00|(214)-[:in_lane α=1.00]->(232)|(228)-[:in_lane α=1"
+    },
+    "processing_time_ms": 8.2
+  },
+  {
+    "frame_id": 4,
+    "status": "ok",
+    "n_nodes": 44,
+    "models": {
+      "K-HSTGAN": {
+        "model": "K-HSTGAN",
+        "n_anomaly_nodes": 44,
+        "y_anomaly_mean": 0.5112,
+        "y_anomaly_max": 0.5143
+      },
+      "KS-NBCF": {
+        "model": "KS-NBCF",
+        "n_anomaly_nodes": 42,
+        "y_anomaly_mean": 0.5028,
+        "y_anomaly_max": 0.5125
+      },
+      "RE-GCN": {
+        "model": "RE-GCN",
+        "n_anomaly_nodes": 0,
+        "y_anomaly_mean": 0.4685,
+        "y_anomaly_max": 0.4945
+      },
+      "GDN": {
+        "model": "GDN",
+        "n_anomaly_nodes": 3,
+        "y_anomaly_mean": 0.4852,
+        "y_anomaly_max": 0.512
+      },
+      "GeneralDyG": {
+        "model": "GeneralDyG",
+        "n_anomaly_nodes": 0,
+        "y_anomaly_mean": 0.3442,
+        "y_anomaly_max": 0.3982
+      }
+    },
+    "ks_nbcf_fusion": {
+      "decision": "anomaly",
+      "K": 0.0,
+      "m_fused_anomaly": 0.5112,
+      "is_consistent": true
+    },
+    "ks_nbcf_arbiter": {
+      "resolve_type": "consistent",
+      "y_fused": 0.5112,
+      "overlap": 0.0,
+      "explanation": "K=0.000 Δ-S:anomaly|overlap=0.00|resolve=consistent|evidence_sev=0.00|(214)-[:in_lane α=1.00]->(232)|(228)-[:in_lane α=1"
+    },
+    "processing_time_ms": 8.2
+  }
+]

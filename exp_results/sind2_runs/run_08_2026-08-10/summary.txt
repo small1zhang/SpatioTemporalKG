@@ -1,0 +1,4 @@
+SinD2.0 Training Run: run_08_2026-08-10
+Date: 2026-08-10
+Model: KS-NBCF (K-HSTGAN + D-S Fusion)
+Best F1: 0.8615 (epoch 37)

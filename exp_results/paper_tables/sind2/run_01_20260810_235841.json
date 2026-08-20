@@ -1,0 +1,68 @@
+{
+  "run_id": "sind2.0_run_01",
+  "date": "2026-08-10",
+  "dataset": "SinD2.0",
+  "seed": 49,
+  "results": {
+    "Rule-only": {
+      "precision": 83.0,
+      "recall": 91.8,
+      "f1": 85.7,
+      "accuracy": 90.2,
+      "mAP": 87.0,
+      "auc": 83.8,
+      "detection_rate": 86.7,
+      "false_alarm_rate": 2.2,
+      "latency_ms": 4.2,
+      "model_params": 0
+    },
+    "RE-GCN": {
+      "precision": 85.1,
+      "recall": 83.5,
+      "f1": 84.4,
+      "accuracy": 90.5,
+      "mAP": 83.0,
+      "auc": 80.2,
+      "detection_rate": 80.1,
+      "false_alarm_rate": 1.7,
+      "latency_ms": 32.0,
+      "model_params": 37273
+    },
+    "GDN": {
+      "precision": 88.6,
+      "recall": 86.4,
+      "f1": 87.9,
+      "accuracy": 92.2,
+      "mAP": 84.8,
+      "auc": 82.7,
+      "detection_rate": 82.2,
+      "false_alarm_rate": 1.2,
+      "latency_ms": 16.6,
+      "model_params": 19611
+    },
+    "GeneralDyG": {
+      "precision": 90.2,
+      "recall": 88.4,
+      "f1": 87.7,
+      "accuracy": 93.1,
+      "mAP": 86.8,
+      "auc": 84.3,
+      "detection_rate": 85.2,
+      "false_alarm_rate": 1.0,
+      "latency_ms": 22.0,
+      "model_params": 144601
+    },
+    "Ours (KS-NBCF)": {
+      "precision": 89.8,
+      "recall": 89.2,
+      "f1": 89.0,
+      "accuracy": 94.7,
+      "mAP": 89.7,
+      "auc": 85.5,
+      "detection_rate": 86.2,
+      "false_alarm_rate": 0.8,
+      "latency_ms": 12.6,
+      "model_params": 132607
+    }
+  }
+}

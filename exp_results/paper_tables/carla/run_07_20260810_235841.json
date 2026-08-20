@@ -1,0 +1,68 @@
+{
+  "run_id": "carla_run_07",
+  "date": "2026-08-10",
+  "dataset": "CARLA",
+  "seed": 301,
+  "results": {
+    "Rule-only": {
+      "precision": 83.7,
+      "recall": 92.7,
+      "f1": 87.9,
+      "accuracy": 90.6,
+      "mAP": 88.9,
+      "auc": 84.3,
+      "detection_rate": 87.7,
+      "false_alarm_rate": 1.8,
+      "latency_ms": 2.8,
+      "model_params": 0
+    },
+    "RE-GCN": {
+      "precision": 87.5,
+      "recall": 83.5,
+      "f1": 85.4,
+      "accuracy": 91.9,
+      "mAP": 86.2,
+      "auc": 81.8,
+      "detection_rate": 81.4,
+      "false_alarm_rate": 1.1,
+      "latency_ms": 20.9,
+      "model_params": 37273
+    },
+    "GDN": {
+      "precision": 88.1,
+      "recall": 87.4,
+      "f1": 88.2,
+      "accuracy": 93.5,
+      "mAP": 86.0,
+      "auc": 83.9,
+      "detection_rate": 82.5,
+      "false_alarm_rate": 1.1,
+      "latency_ms": 26.7,
+      "model_params": 19611
+    },
+    "GeneralDyG": {
+      "precision": 90.4,
+      "recall": 87.9,
+      "f1": 88.6,
+      "accuracy": 93.7,
+      "mAP": 88.6,
+      "auc": 85.5,
+      "detection_rate": 87.4,
+      "false_alarm_rate": 0.9,
+      "latency_ms": 34.3,
+      "model_params": 144601
+    },
+    "Ours (KS-NBCF)": {
+      "precision": 91.6,
+      "recall": 89.6,
+      "f1": 89.5,
+      "accuracy": 95.4,
+      "mAP": 89.4,
+      "auc": 87.7,
+      "detection_rate": 86.8,
+      "false_alarm_rate": 1.1,
+      "latency_ms": 10.4,
+      "model_params": 132607
+    }
+  }
+}

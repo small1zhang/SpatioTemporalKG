@@ -1,0 +1,5 @@
+CARLA Training Run: run_10_2026-08-10
+Date: 2026-08-10
+Model: KS-NBCF (K-HSTGAN + D-S Fusion)
+Best F1: 0.9199 (epoch 45)
+Final loss: 0.1938

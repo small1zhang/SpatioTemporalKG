@@ -35,6 +35,16 @@ logs/
 !exp_results/**/*.log
 !exp_results/**/*.md
 !exp_results/verify_data.py
+!exp_results/generate_all.py
+
+# Exception: data/ 下的 metadata.json 入版本（保留数据集元信息）
+!data/sind2_dataset/metadata.json
+!data/sind2_dataset/event_labels.json
+!data/carla_simulated/metadata.json
+
+# Exception: model/ 代码目录入版本
+!model/**/*.py
+!model/**/*.md
 
 # Environment
 .env
