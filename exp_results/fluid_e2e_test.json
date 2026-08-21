@@ -1,0 +1,79 @@
+{
+  "test_name": "FLUID End-to-End",
+  "timestamp": "2026-08-21T09:12:07.699154",
+  "device": "cpu",
+  "n_frames_tested": 10,
+  "avg_time_ms": 7.3616,
+  "results": [
+    {
+      "frame_id": 0,
+      "n_nodes": 31,
+      "anomaly_nodes": 31,
+      "anomaly_prob_mean": 0.563788115978241,
+      "decision": "anomaly"
+    },
+    {
+      "frame_id": 1,
+      "n_nodes": 24,
+      "anomaly_nodes": 24,
+      "anomaly_prob_mean": 0.5656526684761047,
+      "decision": "anomaly"
+    },
+    {
+      "frame_id": 2,
+      "n_nodes": 44,
+      "anomaly_nodes": 44,
+      "anomaly_prob_mean": 0.5646848082542419,
+      "decision": "anomaly"
+    },
+    {
+      "frame_id": 3,
+      "n_nodes": 34,
+      "anomaly_nodes": 34,
+      "anomaly_prob_mean": 0.5655288696289062,
+      "decision": "anomaly"
+    },
+    {
+      "frame_id": 4,
+      "n_nodes": 41,
+      "anomaly_nodes": 41,
+      "anomaly_prob_mean": 0.5636574029922485,
+      "decision": "anomaly"
+    },
+    {
+      "frame_id": 5,
+      "n_nodes": 32,
+      "anomaly_nodes": 32,
+      "anomaly_prob_mean": 0.5651305913925171,
+      "decision": "anomaly"
+    },
+    {
+      "frame_id": 6,
+      "n_nodes": 39,
+      "anomaly_nodes": 39,
+      "anomaly_prob_mean": 0.5641821622848511,
+      "decision": "anomaly"
+    },
+    {
+      "frame_id": 7,
+      "n_nodes": 31,
+      "anomaly_nodes": 31,
+      "anomaly_prob_mean": 0.5639199018478394,
+      "decision": "anomaly"
+    },
+    {
+      "frame_id": 8,
+      "n_nodes": 20,
+      "anomaly_nodes": 20,
+      "anomaly_prob_mean": 0.564231276512146,
+      "decision": "anomaly"
+    },
+    {
+      "frame_id": 9,
+      "n_nodes": 35,
+      "anomaly_nodes": 35,
+      "anomaly_prob_mean": 0.564163088798523,
+      "decision": "anomaly"
+    }
+  ]
+}

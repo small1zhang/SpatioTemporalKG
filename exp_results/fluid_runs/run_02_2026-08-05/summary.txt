@@ -1,0 +1,4 @@
+FLUID Training Run: run_02_2026-08-05
+Date: 2026-08-05
+Model: KS-NBCF (K-HSTGAN + D-S Fusion)
+Best F1: 0.8832 (epoch 28)
