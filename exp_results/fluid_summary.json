@@ -1,0 +1,136 @@
+{
+  "start_date": "2026-08-04",
+  "end_date": "2026-08-10",
+  "total_days": 7,
+  "training_runs": [
+    {
+      "run_id": "fluid_daily_01_2026-08-04",
+      "date": "2026-08-04",
+      "best_f1": 0.8919735488190926,
+      "best_epoch": 29,
+      "hyperparameters": {
+        "lr": 0.001,
+        "hidden_dim": 64,
+        "dropout": 0.2,
+        "batch_size": 32,
+        "max_epochs": 30,
+        "patience": 6,
+        "focal_gamma": 3.0,
+        "tau_K": 0.3
+      }
+    },
+    {
+      "run_id": "fluid_daily_02_2026-08-05",
+      "date": "2026-08-05",
+      "best_f1": 0.9008142298790938,
+      "best_epoch": 29,
+      "hyperparameters": {
+        "lr": 0.001,
+        "hidden_dim": 64,
+        "dropout": 0.2,
+        "batch_size": 64,
+        "max_epochs": 30,
+        "patience": 6,
+        "focal_gamma": 3.0,
+        "tau_K": 0.3
+      }
+    },
+    {
+      "run_id": "fluid_daily_03_2026-08-06",
+      "date": "2026-08-06",
+      "best_f1": 0.897262515256511,
+      "best_epoch": 27,
+      "hyperparameters": {
+        "lr": 0.0005,
+        "hidden_dim": 64,
+        "dropout": 0.1,
+        "batch_size": 32,
+        "max_epochs": 30,
+        "patience": 6,
+        "focal_gamma": 3.0,
+        "tau_K": 0.3
+      }
+    },
+    {
+      "run_id": "fluid_daily_04_2026-08-07",
+      "date": "2026-08-07",
+      "best_f1": 0.8862643769593637,
+      "best_epoch": 26,
+      "hyperparameters": {
+        "lr": 0.001,
+        "hidden_dim": 64,
+        "dropout": 0.2,
+        "batch_size": 64,
+        "max_epochs": 30,
+        "patience": 6,
+        "focal_gamma": 3.0,
+        "tau_K": 0.3
+      }
+    },
+    {
+      "run_id": "fluid_daily_05_2026-08-08",
+      "date": "2026-08-08",
+      "best_f1": 0.8978672426462883,
+      "best_epoch": 27,
+      "hyperparameters": {
+        "lr": 0.0005,
+        "hidden_dim": 128,
+        "dropout": 0.1,
+        "batch_size": 64,
+        "max_epochs": 30,
+        "patience": 6,
+        "focal_gamma": 3.0,
+        "tau_K": 0.3
+      }
+    },
+    {
+      "run_id": "fluid_daily_06_2026-08-09",
+      "date": "2026-08-09",
+      "best_f1": 0.8900511782205572,
+      "best_epoch": 28,
+      "hyperparameters": {
+        "lr": 0.001,
+        "hidden_dim": 128,
+        "dropout": 0.2,
+        "batch_size": 64,
+        "max_epochs": 30,
+        "patience": 6,
+        "focal_gamma": 3.0,
+        "tau_K": 0.3
+      }
+    },
+    {
+      "run_id": "fluid_daily_07_2026-08-10",
+      "date": "2026-08-10",
+      "best_f1": 0.8846182919712297,
+      "best_epoch": 28,
+      "hyperparameters": {
+        "lr": 0.001,
+        "hidden_dim": 64,
+        "dropout": 0.2,
+        "batch_size": 32,
+        "max_epochs": 30,
+        "patience": 6,
+        "focal_gamma": 3.0,
+        "tau_K": 0.3
+      }
+    }
+  ],
+  "detection_summary": {
+    "K": {
+      "f1_mean": 0.0,
+      "f1_std": 0.0,
+      "best_f1": 0
+    },
+    "G": {
+      "f1_mean": 0.0,
+      "f1_std": 0.0,
+      "best_f1": 0
+    },
+    "R": {
+      "f1_mean": 0.0,
+      "f1_std": 0.0,
+      "best_f1": 0
+    }
+  }
+}

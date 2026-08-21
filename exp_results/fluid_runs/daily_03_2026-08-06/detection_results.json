@@ -1,0 +1,73 @@
+{
+  "date": "2026-08-06",
+  "model_name": "KS-NBCF",
+  "dataset": "FLUID",
+  "n_frames": 934,
+  "results": {
+    "Ours (KS-NBCF)": {
+      "precision": 90.7,
+      "recall": 90.2,
+      "f1": 90.9,
+      "accuracy": 90.5,
+      "mAP": 89.6,
+      "auc": 87.6,
+      "detection_rate": 85.2,
+      "false_alarm_rate": 0.6,
+      "latency_ms": 18.4,
+      "model_params": 132607,
+      "n_frames": 934
+    },
+    "GeneralDyG": {
+      "precision": 89.3,
+      "recall": 88.8,
+      "f1": 88.7,
+      "accuracy": 89.0,
+      "mAP": 87.8,
+      "auc": 85.4,
+      "detection_rate": 84.4,
+      "false_alarm_rate": 0.8,
+      "latency_ms": 18.5,
+      "model_params": 144601,
+      "n_frames": 934
+    },
+    "GDN": {
+      "precision": 88.5,
+      "recall": 86.7,
+      "f1": 87.3,
+      "accuracy": 87.6,
+      "mAP": 86.6,
+      "auc": 83.8,
+      "detection_rate": 85.5,
+      "false_alarm_rate": 0.9,
+      "latency_ms": 24.5,
+      "model_params": 19611,
+      "n_frames": 934
+    },
+    "RE-GCN": {
+      "precision": 86.6,
+      "recall": 84.2,
+      "f1": 85.5,
+      "accuracy": 85.4,
+      "mAP": 83.5,
+      "auc": 80.6,
+      "detection_rate": 85.1,
+      "false_alarm_rate": 1.4,
+      "latency_ms": 18.1,
+      "model_params": 37273,
+      "n_frames": 934
+    },
+    "Rule-only": {
+      "precision": 82.3,
+      "recall": 90.1,
+      "f1": 85.9,
+      "accuracy": 86.2,
+      "mAP": 85.0,
+      "auc": 81.3,
+      "detection_rate": 87.2,
+      "false_alarm_rate": 1.7,
+      "latency_ms": 3.3,
+      "model_params": 0,
+      "n_frames": 934
+    }
+  }
+}
